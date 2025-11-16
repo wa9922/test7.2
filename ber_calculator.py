@@ -24,7 +24,8 @@ class BERCalculator:
         self.signal_generator = SignalGenerator()
         
         # STF 참조 비트 시퀀스 (원본)
-        self.stf_reference_bits = np.array(STF_BITS)
+        # GNURadio 호환: uint8 타입
+        self.stf_reference_bits = np.array(STF_BITS, dtype=np.uint8)
         self.stf_length = len(self.stf_reference_bits)
         
         # BER 계산을 위한 슬라이딩 윈도우

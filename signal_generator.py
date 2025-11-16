@@ -18,11 +18,12 @@ class SignalGenerator:
     
     def __init__(self):
         """Signal Generator 초기화"""
-        self.stf_reference_bits = np.array(STF_BITS)
-        self.ltf_reference_bits = np.array(LTF_BITS)
+        # GNURadio 호환: 비트는 uint8 타입
+        self.stf_reference_bits = np.array(STF_BITS, dtype=np.uint8)
+        self.ltf_reference_bits = np.array(LTF_BITS, dtype=np.uint8)
         self.samples_per_symbol = SAMPLES_PER_SYMBOL  # 클래스 속성으로 추가
         self.sampling_rate = SAMPLING_RATE            # 클래스 속성으로 추가
-        print(f"Signal Generator initialized")
+        print(f"Signal Generator initialized (GNURadio compatible)")
         print(f"STF length: {len(self.stf_reference_bits)} bits")
         print(f"LTF length: {len(self.ltf_reference_bits)} bits")
         print(f"Samples per symbol: {self.samples_per_symbol}")
@@ -30,37 +31,37 @@ class SignalGenerator:
     def bits_to_bpsk(self, bits: np.ndarray) -> np.ndarray:
         """
         비트 시퀀스를 BPSK 변조된 복소수 신호로 변환합니다.
-        
+
         Args:
             bits (np.ndarray): 입력 비트 시퀀스 (0 또는 1)
-            
+
         Returns:
-            np.ndarray: BPSK 변조된 복소수 신호
+            np.ndarray: BPSK 변조된 복소수 신호 (complex64 타입, GNURadio 호환)
         """
-        # 각 비트를 BPSK 심볼로 매핑
-        symbols = np.array([BPSK_CONSTELLATION[bit] for bit in bits])
-        
+        # 각 비트를 BPSK 심볼로 매핑 (GNURadio 호환: complex64)
+        symbols = np.array([BPSK_CONSTELLATION[bit] for bit in bits], dtype=np.complex64)
+
         # 업샘플링: 각 심볼을 samples_per_symbol만큼 반복
         upsampled_signal = np.repeat(symbols, self.samples_per_symbol)
-        
+
         return upsampled_signal
     
     def bpsk_to_bits(self, signal: np.ndarray) -> np.ndarray:
         """
         BPSK 변조된 신호를 비트로 복조합니다.
-        
+
         Args:
             signal (np.ndarray): BPSK 변조된 복소수 신호
-            
+
         Returns:
-            np.ndarray: 복조된 비트 시퀀스
+            np.ndarray: 복조된 비트 시퀀스 (uint8 타입, GNURadio 호환)
         """
         # 다운샘플링: samples_per_symbol마다 샘플링
         downsampled = signal[::self.samples_per_symbol]
-        
-        # Hard decision: 실수부가 0보다 크면 1, 작으면 0
-        bits = (np.real(downsampled) > 0).astype(int)
-        
+
+        # Hard decision: 실수부가 0보다 크면 1, 작으면 0 (GNURadio 호환: uint8)
+        bits = (np.real(downsampled) > 0).astype(np.uint8)
+
         return bits
     
     def generate_stf_signal(self) -> tuple:
@@ -118,10 +119,10 @@ class SignalGenerator:
         
         # 2비트 트래픽 indication + 2비트 control bits (현재는 00으로 설정)
         signal_field_bits_str = traffic_bits_str + "00"
-        signal_field_bits = np.array([int(bit) for bit in signal_field_bits_str])
-        
-        # 48비트까지 패딩 (실제 802.11 Signal Field 길이)
-        padding_bits = np.zeros(SIGNAL_FIELD_BITS - len(signal_field_bits), dtype=int)
+        signal_field_bits = np.array([int(bit) for bit in signal_field_bits_str], dtype=np.uint8)
+
+        # 48비트까지 패딩 (실제 802.11 Signal Field 길이) - GNURadio 호환: uint8
+        padding_bits = np.zeros(SIGNAL_FIELD_BITS - len(signal_field_bits), dtype=np.uint8)
         full_signal_field_bits = np.concatenate([signal_field_bits, padding_bits])
         
         # BPSK 변조
@@ -135,19 +136,20 @@ class SignalGenerator:
     def generate_payload(self, payload_length: int = PAYLOAD_BITS) -> tuple:
         """
         랜덤 Payload 데이터를 생성합니다.
-        
+
         Args:
             payload_length (int): Payload 길이 (비트)
-            
+
         Returns:
             tuple: (Payload 비트 시퀀스, Payload BPSK 신호)
         """
         # 랜덤 비트 생성 (Monte Carlo 시뮬레이션을 위해 시드 고정 해제)
-        payload_bits = np.random.randint(0, 2, payload_length)
-        
+        # GNURadio 호환: uint8 타입
+        payload_bits = np.random.randint(0, 2, payload_length, dtype=np.uint8)
+
         # BPSK 변조
         payload_signal = self.bits_to_bpsk(payload_bits)
-        
+
         print(f"Generated Payload: {len(payload_bits)} bits → {len(payload_signal)} samples")
         return payload_bits, payload_signal
     

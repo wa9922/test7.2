@@ -3,6 +3,10 @@
 """
 ADC (Analog-to-Digital Converter) 모델 구현
 실제 양자화를 시뮬레이션하는 ADC 클래스들
+
+GNURadio 호환:
+- Short (int16): 16비트 정수
+- Byte (uint8): 8비트 부호 없는 정수
 """
 
 import numpy as np
@@ -32,19 +36,19 @@ class BaseADC:
 
     def quantize(self, x: np.ndarray) -> np.ndarray:
         """
-        신호를 양자화
+        신호를 양자화 (float 출력)
 
         Args:
             x: 입력 신호
 
         Returns:
-            양자화된 신호
+            양자화된 신호 (float32, GNURadio Float 타입 호환)
         """
         # 입력을 vref 범위로 클리핑
         x_clipped = np.clip(x, -self.vref, self.vref)
 
-        # 양자화 스텝으로 반올림
-        x_quantized = np.round(x_clipped / self.step) * self.step
+        # 양자화 스텝으로 반올림 (GNURadio 호환: float32)
+        x_quantized = (np.round(x_clipped / self.step) * self.step).astype(np.float32)
 
         return x_quantized
 
@@ -56,16 +60,16 @@ class BaseADC:
             x: 입력 신호
 
         Returns:
-            정수 양자화 레벨
+            정수 양자화 레벨 (int16, GNURadio Short 타입 호환)
         """
         # 입력을 vref 범위로 클리핑
         x_clipped = np.clip(x, -self.vref, self.vref)
 
-        # 정수 레벨로 변환
+        # 정수 레벨로 변환 (GNURadio 호환: int16)
         x_int = np.round(x_clipped / self.step)
         x_int = np.clip(x_int, self.min_value, self.max_value)
 
-        return x_int.astype(int)
+        return x_int.astype(np.int16)
 
     def convert(self, x: np.ndarray) -> np.ndarray:
         """

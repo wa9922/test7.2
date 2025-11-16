@@ -142,8 +142,8 @@ class SignalFieldDecoder:
             if signal_field_signal is None or len(signal_field_signal) < 2:
                 return packet_info.get('traffic_type', 'wake_up')
 
-            # BPSK 복조: 실수부의 부호로 비트 판정
-            demodulated_bits = (np.real(signal_field_signal) > 0).astype(int)
+            # BPSK 복조: 실수부의 부호로 비트 판정 (GNURadio 호환: uint8)
+            demodulated_bits = (np.real(signal_field_signal) > 0).astype(np.uint8)
 
             # 앞 2비트로 트래픽 타입 결정
             if len(demodulated_bits) >= 2:

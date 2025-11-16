@@ -13,7 +13,8 @@ SIGNAL_FIELD_BITS = 48
 PAYLOAD_BITS      = 1024
 
 # --- BPSK ---
-BPSK_CONSTELLATION = {0: -1.0+0j, 1: +1.0+0j}
+# GNURadio 호환: Complex는 float32 실수부 + float32 허수부 = 64비트
+BPSK_CONSTELLATION = {0: np.complex64(-1.0+0j), 1: np.complex64(+1.0+0j)}
 
 # --- FSM 이득 레벨(그대로 두되, 아날로그 단일화 이후에도 동작) ---
 GAIN_LEVELS = {
