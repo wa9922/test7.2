@@ -77,20 +77,51 @@ class BaseADC:
         """
         return self.quantize(x)
 
+    def truncate_to_bits(self, x: np.ndarray, target_bits: int) -> np.ndarray:
+        """
+        디지털 신호를 더 낮은 비트로 잘라내기 (Digital Truncation)
 
-class ADC3bit(BaseADC):
+        예: 10비트 신호 (0~1023) → 5비트 (0~31)로 상위 비트만 사용
+
+        Args:
+            x: 입력 신호 (이미 양자화된)
+            target_bits: 목표 비트 수
+
+        Returns:
+            truncated 신호 (float32, 더 적은 레벨만 사용)
+        """
+        if target_bits >= self.n_bits:
+            # truncation 불필요
+            return x.astype(np.float32)
+
+        # 정수 레벨로 변환
+        x_clipped = np.clip(x, -self.vref, self.vref)
+        x_int = np.round(x_clipped / self.step)
+
+        # 비트 시프트로 상위 비트만 추출
+        bit_shift = self.n_bits - target_bits
+        x_truncated_int = x_int >> bit_shift  # 하위 비트 버림
+
+        # 다시 원래 스케일로 복원 (하지만 레벨은 적음)
+        x_truncated_int = x_truncated_int << bit_shift
+        x_truncated = x_truncated_int * self.step
+
+        return x_truncated.astype(np.float32)
+
+
+class ADC5bit(BaseADC):
     """
-    3-bit ADC (저전력 모드용)
-    8개 양자화 레벨 (-4 ~ 3)
+    5-bit ADC (저전력 모드용)
+    32개 양자화 레벨 (-16 ~ 15)
     """
 
     def __init__(self, vref: float = 1.0):
-        super().__init__(n_bits=3, vref=vref)
+        super().__init__(n_bits=5, vref=vref)
 
 
 class ADC10bit(BaseADC):
     """
-    10-bit ADC (고성능 모드용)
+    10-bit ADC (고성능 모드용, 항상 사용)
     1024개 양자화 레벨 (-512 ~ 511)
     """
 

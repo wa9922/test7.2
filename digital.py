@@ -68,6 +68,52 @@ class DigitalAreaModel:
             'total_area': total_area
         }
     
+    def calculate_operations_for_bits(self, n_bits, num_samples=1):
+        """
+        비트 수에 따른 연산량 계산 (교수님 피드백 반영)
+
+        Args:
+            n_bits: 사용하는 비트 수 (5 또는 10)
+            num_samples: 처리할 샘플 수
+
+        Returns:
+            dict: {
+                'num_adds': 덧셈 연산 수,
+                'num_mults': 곱셈 연산 수,
+                'energy_pj': 총 에너지 (pJ)
+            }
+        """
+        # 비트 수에 비례하는 연산량 (K_ADD, K_MUL 사용)
+        # carrier sensing, BER 계산, 디지털 처리 포함
+        from config import K_ADD_PER_SAMPLE, K_MUL_PER_SAMPLE
+
+        # 샘플당 연산 수
+        adds_per_sample = K_ADD_PER_SAMPLE * n_bits
+        mults_per_sample = K_MUL_PER_SAMPLE * (n_bits ** 2)
+
+        # 총 연산 수
+        total_adds = adds_per_sample * num_samples
+        total_mults = mults_per_sample * num_samples
+
+        # 연산당 에너지 (면적 기반)
+        adder_area = self.get_nbit_adder_area(n_bits)
+        mult_area = self.get_nbit_multiplier_area(n_bits)
+
+        # 에너지 = 연산 수 × 면적 (간단화된 모델)
+        # 1 연산 × 1 μm² ≈ 0.01 pJ (가정)
+        ENERGY_PER_AREA = 0.01  # pJ/μm²
+
+        add_energy = total_adds * adder_area * ENERGY_PER_AREA
+        mult_energy = total_mults * mult_area * ENERGY_PER_AREA
+
+        return {
+            'num_adds': int(total_adds),
+            'num_mults': int(total_mults),
+            'energy_pj': add_energy + mult_energy,
+            'adder_area': adder_area,
+            'mult_area': mult_area
+        }
+
     def get_area(self, block_type, count=1):
         """
         레거시 함수 - 기존 코드 호환성 유지

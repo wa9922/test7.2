@@ -27,18 +27,19 @@ GAIN_LEVELS = {
 # (기존) 트래픽별 ADC 해상도 정의는 더 이상 실제 ADC 비트 선택에 쓰지 않음.
 # 대신, 아래 DIGITAL_TRUNCATION_BITS로 디지털 파이프라인에서 '잘라 쓰기'를 함.
 TRAFFIC_ADC_RESOLUTION = {
-    "wake_up": 3,
-    "sensor":  4,
-    "voice":   8,
+    "wake_up": 5,   # 3비트 → 5비트로 변경 (quantization noise 감소)
+    "sensor":  5,
+    "voice":   10,
     "video":   10,
 }
 
 # 디지털 파이프라인에서 사용할 "트렁케이션 비트 수"
+# ADC는 항상 10비트로 동작, 디지털 단에서 5비트 또는 10비트로 truncate
 DIGITAL_TRUNCATION_BITS = {
-    "wake_up": 3,
-    "sensor":  4,
-    "voice":   8,
-    "video":   10
+    "wake_up": 5,   # 저전력: 5비트 사용
+    "sensor":  5,   # 저전력: 5비트 사용
+    "voice":   10,  # 고성능: 10비트 전부 사용
+    "video":   10   # 고성능: 10비트 전부 사용
 }
 
 # FSM 상태 ↔ 트래픽 타입 매핑
@@ -54,13 +55,13 @@ TRAFFIC_INDICATION_MAPPING = {"00":"sensor","01":"voice","10":"video","11":"wake
 SIGNAL_FIELD_STRUCTURE = {"traffic_type":2,"control_bits":2,"total_bits":4}
 
 # --- Carrier sensing ---
-SATURATION_THRESHOLD = {"3bit":3, "10bit":510}
+SATURATION_THRESHOLD = {"5bit":15, "10bit":510}  # 5비트: 32레벨 중 15, 10비트: 1024레벨 중 510
 ENERGY_DETECTION_THRESHOLD = -75
 CORRELATION_THRESHOLD = 0.6
 
 # --- LUT ---
 LUT_THRESHOLDS = {
-    "LOW_GAIN_LP": {"saturation_th":SATURATION_THRESHOLD["3bit"],
+    "LOW_GAIN_LP": {"saturation_th":SATURATION_THRESHOLD["5bit"],
                     "energy_th":0.01,"corr_th":0.6,"gain_code":"0100"},
     "LOW_GAIN_HP": {"saturation_th":SATURATION_THRESHOLD["10bit"]//4,
                     "energy_th":0.05,"corr_th":0.7,"gain_code":"0110"},

@@ -178,3 +178,67 @@ class LowPowerPath:
             self.coarse_gain = coarse_gain
         if fine_gain is not None:
             self.fine_gain = fine_gain
+
+
+class UnifiedRFPath:
+    """
+    통일된 RF 프론트엔드 경로 (교수님 피드백 반영)
+
+    아날로그 부분은 항상 동일하게 동작:
+    - 항상 같은 LNA, VGA, LPF 사용
+    - 전력 소비 항상 동일
+    - Gain만 피드백으로 조절
+
+    구조: [LNA] → [Mixer] → [VGA] → [LPF]
+           ↑                ↑
+           └────────────────┴─── Gain Control Feedback
+    """
+
+    def __init__(self, lna_gain: float = 20, vga_gain: float = 20, lpf_alpha: float = 0.2):
+        """
+        통일된 RF 경로 초기화
+
+        Args:
+            lna_gain: LNA 고정 이득 (dB)
+            vga_gain: VGA 초기 이득 (dB)
+            lpf_alpha: LPF 필터 계수
+        """
+        self.lna_gain = lna_gain
+        self.vga_gain = vga_gain
+        self.lpf_alpha = lpf_alpha
+        print(f"Unified RF Path initialized: LNA={lna_gain}dB, VGA={vga_gain}dB")
+
+    def run(self, x: np.ndarray) -> np.ndarray:
+        """
+        신호를 통일된 RF 경로로 처리
+
+        Args:
+            x: 입력 신호
+
+        Returns:
+            처리된 신호
+        """
+        # LNA → Mixer → VGA → LPF
+        x = lna(x, self.lna_gain)
+        x = mixer(x, lo=1.0)
+        x = vga(x, self.vga_gain)
+        x = lpf(x, self.lpf_alpha)
+        return x
+
+    def set_vga_gain(self, gain_db: float):
+        """
+        VGA 이득 조절 (Gain Control Feedback)
+
+        Args:
+            gain_db: VGA 이득 (dB)
+        """
+        self.vga_gain = gain_db
+
+    def get_total_gain(self) -> float:
+        """
+        총 이득 반환
+
+        Returns:
+            총 이득 (dB)
+        """
+        return self.lna_gain + self.vga_gain
