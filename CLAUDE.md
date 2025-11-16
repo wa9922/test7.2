@@ -4,18 +4,25 @@
 
 ### Purpose
 This project is a **Python-based simulation framework for Automatic Gain Control (AGC) systems** in wireless receiver design. It implements and compares three AGC approaches:
-1. **Low-Power Fixed AGC** - Conservative, always uses minimum power (3-bit ADC, 10dB gain)
-2. **High-Performance Fixed AGC** - Aggressive, always uses maximum performance (10-bit ADC, 40dB gain)
-3. **Adaptive AGC** (Proposed) - Dynamic approach that adjusts ADC resolution and gain based on detected traffic type
+1. **Low-Power Fixed AGC** - Conservative, always uses minimum power (5-bit digital, 15dB gain)
+2. **High-Performance Fixed AGC** - Aggressive, always uses maximum performance (10-bit digital, 40dB gain)
+3. **Adaptive AGC** (Proposed) - Dynamic approach that adjusts digital bits and gain based on detected traffic type
 
 ### Domain
 - **Wireless Communications/Receiver Design**
 - **Energy-Efficient Signal Processing**
 - **Hardware-Software Co-design**
-- Targets IoT/embedded wireless systems with multiple traffic types (wake-up, sensor, voice, video)
+- Targets IoT/embedded wireless systems with multiple traffic types (wake-up, lowpowersignal, highperformancesignal)
 
 ### Key Objective
-Demonstrate that an adaptive AGC system can achieve a better balance between energy consumption and signal quality (BER) compared to fixed-mode approaches, by dynamically selecting ADC resolution and RF gain based on detected traffic type.
+Demonstrate that an adaptive AGC system can achieve a better balance between energy consumption and signal quality (BER) compared to fixed-mode approaches, by dynamically selecting digital truncation bits and RF gain based on detected traffic type.
+
+### 교수님 피드백 반영 사항 (Professor's Feedback)
+1. **아날로그 단일화 (Unified Analog)**: 아날로그 부분은 항상 동일 (UnifiedRFPath, ADC 10-bit 고정)
+2. **디지털 Truncation**: ADC는 항상 10비트로 동작, 디지털 단에서 5비트 또는 10비트로 truncate
+3. **전력 비교**: 디지털 연산량만 차이 (아날로그 전력 동일)
+4. **FSM 제거**: FSM을 제거하고 순수 피드백 기반 AGC로 변경
+5. **트래픽 타입**: sensor/voice/video → lowpowersignal/highperformancesignal
 
 ---
 
@@ -24,26 +31,28 @@ Demonstrate that an adaptive AGC system can achieve a better balance between ene
 ### High-Level System Flow
 
 ```
-Input Packet (traffic_type) 
+Input Packet (traffic_type)
     ↓
 SignalGenerator: Generate PHY packet (STF + LTF preamble + Signal Field + Payload)
     ↓
 Add AWGN Noise (channel simulation)
     ↓
-RF Frontend Path Selection
-    ├─ LowPowerPath (LOW_GAIN_LP state) → Limited gain, low power
-    └─ HighPerfPath (other states) → Full gain, high power
+UnifiedRFPath (항상 동일한 아날로그 회로)
+    └─ LNA(20dB) → Mixer → VGA(가변) → LPF
     ↓
-ADC Quantization (3-bit or 10-bit based on ADC resolution)
+ADC Quantization (항상 10-bit)
+    ↓
+Digital Truncation (5-bit 또는 10-bit)
     ↓
 Block-by-Block Processing
-    ├─ CarrierSensing (3 methods: saturation, energy, correlation detection)
+    ├─ Carrier Sensing (3 methods: saturation, energy, correlation detection)
+    ├─ Signal Field Decoding (traffic type detection)
+    ├─ Digital Bits Selection (5-bit for lowpowersignal, 10-bit for highperformancesignal)
+    ├─ Gain Feedback (peak-based, continuous adjustment 10-50dB)
     ├─ BER Calculation (measure signal quality on STF)
-    ├─ FSM State Transitions (based on carrier sensing + signal field indication)
-    ├─ Dynamic Gain Adjustment (peak-based feedback)
     └─ Power Measurements (analog + digital)
     ↓
-Collect Metrics (BER, power, energy, gain, FSM state)
+Collect Metrics (BER, power, energy, gain)
     ↓
 Output: Packet result with performance metrics
 ```
@@ -52,24 +61,24 @@ Output: Packet result with performance metrics
 
 ```
 AgcSystem (main orchestrator)
-├── AgcFsm (Finite State Machine)
-│   ├── States: LOW_GAIN_LP, LOW_GAIN_HP, MEDIUM_GAIN, HIGH_GAIN
-│   ├── LUT: Thresholds per state
-│   └── Output: current_state, gain_db, adc_resolution
+├── 순수 피드백 Gain Control
+│   ├── current_gain_db: 직접 gain 변수 (10-50dB 범위)
+│   ├── enable_gain_feedback: Gain 피드백 활성화 플래그
+│   └── Peak-based feedback: 신호 크기에 따라 자동 조절
 │
 ├── SignalGenerator
 │   ├── BPSK modulation
 │   └── Packet generation: preamble (STF+LTF) + signal field + payload
 │
-├── RF Paths (Analog Frontend)
-│   ├── LowPowerPath: LNA(fixed) → Mixer → LPF
-│   └── HighPerfPath: LNA(fixed) → Mixer → VGA → LPF
+├── UnifiedRFPath (통일된 아날로그 프론트엔드)
+│   ├── LNA(20dB 고정) → Mixer → VGA(가변 0-30dB) → LPF
+│   └── 전력 소비 항상 동일
 │
 ├── ADC (Analog-to-Digital Converter)
-│   ├── ADC3bit (low-power mode, 8 levels)
-│   └── ADC10bit (high-perf mode, 1024 levels)
+│   ├── ADC10bit (항상 10비트로 동작, 1024 levels)
+│   └── truncate_to_bits(): 디지털 단에서 5비트 또는 10비트로 truncation
 │
-├── CarrierSensing
+├── Carrier Sensing
 │   ├── SaturationDetector (ADC saturation check)
 │   ├── EnergyDetector (signal power threshold)
 │   └── CorrelationDetector (STF correlation with received signal)
@@ -77,8 +86,8 @@ AgcSystem (main orchestrator)
 ├── BERCalculator (measure quality on STF using hard-decision BPSK)
 │
 ├── Power Measurement Modules
-│   ├── AnalogPowerMeasurement (MAX2829/MAX2830 models)
-│   └── DigitalComputationMeasurement (area-based energy estimation)
+│   ├── AnalogPowerMeasurement (항상 동일, MAX2829 model)
+│   └── DigitalComputationMeasurement (비트 수에 따라 연산량 변경)
 │
 └── Utilities
     ├── TimeSeriesDataCollector
@@ -93,62 +102,40 @@ AgcSystem (main orchestrator)
 
 ### Core Processing Modules
 
-#### **main_agc_system.py** (713 lines)
+#### **main_agc_system.py**
 **Role**: Main AGC system class and simulation orchestrator
 
 **Key Classes**:
 - `AgcSystem`: Primary class implementing the adaptive AGC system
-  - `__init__()`: Initialize FSM, RF paths, ADC, carrier sensing, power models
-  - `process_packet()`: Main packet processing pipeline
-  - `apply_adc_quantization()`: ADC quantization simulation
+  - `__init__()`: Initialize UnifiedRFPath, ADC10bit, carrier sensing, power models
+  - `process_packet()`: Main packet processing pipeline (block-by-block)
+  - `apply_adc_quantization()`: ADC 10-bit 양자화 + 디지털 truncation
   - `extract_signal_field_indication()`: Decode traffic type from signal field
-  - `update_adc_resolution_for_traffic()`: Adaptive ADC selection based on traffic
+  - `update_adc_resolution_for_traffic()`: Adaptive digital bits selection (5 or 10)
   - `run_simulation()`: Execute full simulation with multiple packets/SNR values
 
 **Key Methods**:
-- `process_rf_signal()`: Apply RF path gain and filtering
+- `process_rf_only()`: RF 증폭만 수행 (ADC 양자화 분리)
 - `_update_power_measurements()`: Calculate analog and digital power/energy
 - `_calculate_cs_operations()`: Count arithmetic operations for carrier sensing
 - `_calculate_ber_operations()`: Count arithmetic operations for BER calculation
 - Block-based processing loop with gain feedback based on signal peak
-- State history tracking and statistics collection
+- Gain history tracking and statistics collection
 
-**Entry Point**: `main()` at end of file - runs 3 models and generates 3 comparison metrics graphs
+**Fixed Models**:
+- `FixedLowPowerAGC`: 항상 15dB gain / 5-bit digital / gain feedback 비활성화
+- `FixedHighPerformanceAGC`: 항상 40dB gain / 10-bit digital / gain feedback 비활성화
 
----
-
-#### **agc_fsm.py** (268 lines)
-**Role**: Finite State Machine for AGC control
-
-**Key Classes**:
-- `AgcState` (Enum): Four states
-  - `LOW_GAIN_LP`: Standby/wake-up (10 dB, 3-bit ADC)
-  - `LOW_GAIN_HP`: Sensor data (25 dB, 4-bit ADC)
-  - `MEDIUM_GAIN`: Voice (35 dB, 8-bit ADC)
-  - `HIGH_GAIN`: Video (40 dB, 10-bit ADC)
-
-- `AgcFsm`: State machine implementation
-  - `process_indication()`: Determine if state transition needed based on carrier sensing results and signal field indication
-  - `should_transition()`: Decision logic (wake-up detection, signal field matching, no-signal fallback)
-  - `transition_to_state()`: Perform state change with logging
-  - `get_current_gain()`: Return dB gain for current state
-  - `get_current_adc_resolution()`: Return ADC bits for current state
-  - `xor_gain_comparison()`: Compare expected vs measured gain codes
-  - `get_state_statistics()`: Return transition history
-
-**Transition Logic**:
-1. If in LOW_GAIN_LP and signal detected → await signal field indication
-2. If signal field indicates specific traffic → transition to matching state
-3. If in any state and no signal → return to LOW_GAIN_LP (standby)
-4. Each state has lookup table (LUT) with thresholds for saturation, energy, correlation detection
+**Entry Point**: `main()` at end of file - runs 3 models and generates 11 comparison metrics graphs
 
 ---
 
-#### **carrier_sensing.py** (394 lines)
+#### **carrier_sensing.py**
 **Role**: Detect packet presence using multiple methods
 
 **Key Classes**:
 - `SaturationDetector`: Check if ADC samples exceed saturation threshold
+  - 5-bit 또는 10-bit에 따라 threshold 자동 선택
   - Compares I/Q components against threshold
   - Returns saturation rate and boolean detection
 
@@ -160,7 +147,7 @@ AgcSystem (main orchestrator)
 - `CorrelationDetector`: Correlate received signal with known STF sequence
   - Implements sliding window correlation with STF reference
   - Computes correlation magnitude
-  - Compares to correlation threshold (0.6-0.85 depending on state)
+  - Compares to correlation threshold (0.6-0.85)
 
 - `CarrierSensingTop`: Wrapper combining all three detectors
   - `process_signal()`: Run all detectors on input block
@@ -183,7 +170,7 @@ AgcSystem (main orchestrator)
 
 ---
 
-#### **signal_generator.py** (228 lines)
+#### **signal_generator.py**
 **Role**: Generate PHY-layer wireless packets
 
 **Key Class**:
@@ -198,7 +185,7 @@ AgcSystem (main orchestrator)
 **Packet Structure**:
 ```
 Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
-  128 bits (STF)      48 bits (traffic type)    All modulated BPSK
+  128 bits (STF)      00/01/10 (traffic type)    All modulated BPSK
   +64 bits (LTF)      + control bits            at 20 MHz sampling
 ```
 
@@ -210,7 +197,7 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 
 ---
 
-#### **ber_calculator.py** (250 lines)
+#### **ber_calculator.py**
 **Role**: Calculate Bit Error Rate for signal quality assessment
 
 **Key Class**:
@@ -232,26 +219,28 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 
 ### Hardware Modeling Modules
 
-#### **adc.py** (93 lines)
-**Role**: Simulate ADC quantization
+#### **adc.py**
+**Role**: Simulate ADC quantization and digital truncation
 
 **Key Classes**:
 - `BaseADC`: Generic N-bit ADC model
   - `quantize()`: Round signal to nearest quantization level
   - `quantize_to_int()`: Return integer representation
+  - `truncate_to_bits()`: Digital truncation (10-bit → 5-bit)
   - Parameters: bit width, reference voltage, quantization step
 
-- `ADC3bit`: Low-power variant (8 levels, range: -4 to 3)
-- `ADC10bit`: High-performance variant (1024 levels, range: -512 to 511)
+- `ADC5bit`: 5-bit ADC (참고용, 실제로는 사용 안 함)
+- `ADC10bit`: 10-bit ADC (항상 사용, 1024 levels, range: -512 to 511)
 
-**Quantization Process**:
-1. Clip signal to voltage reference range
-2. Round to nearest step (step = 2*Vref / 2^bits)
-3. Return quantized value
+**Digital Truncation Process** (교수님 피드백 반영):
+1. ADC는 항상 10비트로 양자화
+2. 디지털 단에서 `truncate_to_bits(signal, 5)` 또는 `truncate_to_bits(signal, 10)` 호출
+3. 5비트 truncation: 상위 5비트만 사용 (32 levels)
+4. 10비트: truncation 없음 (1024 levels)
 
 ---
 
-#### **rf_paths.py** (179 lines)
+#### **rf_paths.py**
 **Role**: Model RF front-end analog processing chains
 
 **Functions** (basic operations):
@@ -261,17 +250,17 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 - `lpf()`: Low-Pass Filter (1st-order IIR)
 
 **Key Classes**:
-- `HighPerfPath`: High-performance receiver path
-  - Chain: LNA(20dB) → Mixer → VGA(variable) → LPF
-  - High gain but high power consumption
+- `UnifiedRFPath`: 통일된 RF 프론트엔드 (교수님 피드백 반영)
+  - Chain: LNA(20dB 고정) → Mixer → VGA(가변 0-30dB) → LPF
+  - 전력 소비 항상 동일
+  - Gain만 피드백으로 조절 (총 gain = LNA 20dB + VGA 0-30dB = 20-50dB)
 
-- `LowPowerPath`: Low-power receiver path
-  - Chain: LNA(coarse+fine) → Mixer → LPF (no VGA)
-  - Limited gain but minimal power consumption
+- `HighPerfPath`: 고성능 경로 (참고용, 실제로는 UnifiedRFPath 사용)
+- `LowPowerPath`: 저전력 경로 (참고용, 실제로는 UnifiedRFPath 사용)
 
 ---
 
-#### **analog_power_base.py** (100 lines)
+#### **analog_power_base.py**
 **Role**: Model analog front-end power consumption
 
 **Key Classes**:
@@ -279,19 +268,16 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
   - `get_power()`: Return power for specific mode (mW)
   - `get_energy_consumption()`: Calculate energy for duration (mJ = power × time)
 
-- `MAX2829PowerModel`: High-performance receiver IC model
-  - Standby: ~184 mW
-  - RX active: ~392 mW
+- `MAX2829PowerModel`: High-performance receiver IC model (항상 사용)
+  - RX active: ~392 mW (교수님 피드백: 아날로그는 항상 동일)
 
-- `MAX2830PowerModel`: Low-power receiver IC model
-  - Standby: ~78.4 mW
-  - RX active: ~173.6 mW
+- `MAX2830PowerModel`: Low-power receiver IC model (참고용, 사용 안 함)
 
 - `AnalogPowerMeasurement` (in power_measurement.py): Tracks total and average power
 
 ---
 
-#### **digital.py** (80 lines)
+#### **digital.py**
 **Role**: Model digital processing area and power
 
 **Key Class**:
@@ -299,13 +285,15 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
   - Base areas: Full-adder (1.183 μm²), Multiplier cell (3.5 μm²)
   - N-bit adder area: N × 1.183
   - N-bit multiplier area: N² × 3.5
-  - Total digital processing area depends on ADC bit width
+  - Total digital processing area depends on digital bits (5 or 10)
 
 **Usage**: Estimate energy based on circuit area and operation count
+- 5-bit digital: 적은 area, 적은 연산량
+- 10-bit digital: 큰 area, 많은 연산량
 
 ---
 
-#### **power_measurement.py** (159 lines)
+#### **power_measurement.py**
 **Role**: Aggregate power and energy metrics
 
 **Key Classes**:
@@ -313,17 +301,18 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
   - `update_computation()`: Accumulate multiplications and additions
   - Counts ops from carrier sensing, BER calculation, and bit-dependent operations
   - `get_total_energy()`: Energy = ops × power_per_op × area_scaling (pJ)
+  - **비트 종속 연산**: K_ADD × bits, K_MUL × bits²
 
 - `AnalogPowerMeasurement`: Accumulate analog power consumption
   - `update_power_measurement()`: Add duration × power
   - `get_total_energy()`: Total accumulated energy (mJ)
-  - `calculate_power()`: Power for specific state
+  - `calculate_power()`: 항상 동일한 전력 (UnifiedRFPath)
 
 ---
 
 ### Configuration and Comparison Modules
 
-#### **config.py** (93 lines)
+#### **config.py**
 **Role**: Centralized configuration parameters
 
 **Key Configurations**:
@@ -333,67 +322,75 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
   - Samples per symbol: 20
   - STF/LTF/Signal Field/Payload bit counts
 
-- **AGC Gain Levels** (in dB):
-  - LOW_GAIN_LP: 10 dB (wake-up)
-  - LOW_GAIN_HP: 25 dB (sensor)
-  - MEDIUM_GAIN: 35 dB (voice)
-  - HIGH_GAIN: 40 dB (video)
+- **Gain Levels** (Fixed 모델 참고용):
+  - LOW_GAIN: 15 dB (저전력 모델)
+  - HIGH_GAIN: 40 dB (고성능 모델)
 
-- **ADC Resolution by Traffic Type**:
-  - wake_up: 3 bits
-  - sensor: 4 bits
-  - voice: 8 bits
-  - video: 10 bits
+- **Digital Truncation Bits by Traffic Type** (교수님 피드백 반영):
+  - wake_up: 5 bits
+  - lowpowersignal: 5 bits
+  - highperformancesignal: 10 bits
 
-- **Carrier Sensing Thresholds** (per FSM state):
-  - Saturation thresholds (ADC level dependent)
+- **Carrier Sensing Thresholds**:
+  - Saturation thresholds (5-bit: 15, 10-bit: 510)
   - Energy thresholds (dBm)
   - Correlation thresholds (0.6-0.85)
-  - Gain codes (binary strings)
 
-- **Channel & BER Parameters**:
-  - Default SNR: 10 dB
-  - Noise power: 0.1
-  - BER window size: 128 bits
-  - BER update interval: 100 samples
+- **Signal Field Mapping** (3가지만):
+  - "00": wake_up
+  - "01": lowpowersignal
+  - "10": highperformancesignal
 
 - **Digital Operation Scaling**:
   - K_ADD_PER_SAMPLE: 1.0 (adds per sample per bit)
   - K_MUL_PER_SAMPLE: 0.05 (mults per sample per bit²)
 
+- **Analog Unification Flags**:
+  - UNIFIED_ANALOG_ALWAYS_ON: True (항상 RX on, 동일 전력)
+  - ADC_MAX_BITS: 10 (실제 ADC 고정 비트)
+
 ---
 
-#### **agc_comparison.py** (726 lines)
+#### **agc_comparison.py**
 **Role**: Compare three AGC models and generate result metrics
 
 **Key Classes**:
-- `FixedLowPowerAGC`: Extends AgcSystem, forces LOW_GAIN_LP state + 3-bit ADC always
-  - Overrides `process_packet()` to prevent FSM transitions
+- `FixedLowPowerAGC`: Extends AgcSystem, 15dB gain + 5-bit digital 고정
+  - Overrides `process_packet()` to prevent gain/digital changes
   - Lowest power consumption, potential accuracy loss
 
-- `FixedHighPerformanceAGC`: Extends AgcSystem, forces HIGH_GAIN state + 10-bit ADC always
-  - Overrides `process_packet()` to prevent FSM transitions
+- `FixedHighPerformanceAGC`: Extends AgcSystem, 40dB gain + 10-bit digital 고정
+  - Overrides `process_packet()` to prevent gain/digital changes
   - Highest accuracy, highest power consumption
 
 - `AdaptiveAGC`: Extends AgcSystem, uses full adaptive logic
-  - FSM responds to carrier sensing and signal field indication
-  - ADC resolution selected based on detected traffic type
+  - Gain responds to peak-based feedback (10-50 dB continuous)
+  - Digital bits selected based on detected traffic type
   - Dynamic gain adjustment based on signal peak
 
 **Key Functions**:
 - `run_comparison_simulation()`: Run all 3 models through identical traffic pattern, collect metrics
 - `calculate_average_results()`: Average results across iterations
 - `compute_model_metrics()`: Calculate per-model metrics (total energy, avg BER, latency)
-- `plot_three_metrics_models()`: Generate 3 output graphs
+- `plot_three_metrics_models()`: Generate 3 basic output graphs
+- `plot_extended_metrics()`: Generate 8 additional comparison graphs
 
-**Output Graphs**:
+**Output Graphs** (11 total):
 1. `metrics_energy.png`: Analog (mJ) + Digital (pJ) energy per model
 2. `metrics_accuracy.png`: Average BER per model
 3. `metrics_latency.png`: Average latency per model
+4. `metrics_operations.png`: Total operations (additions, multiplications)
+5. `metrics_energy_efficiency.png`: Bits per Joule
+6. `metrics_sqnr.png`: Signal to Quantization Noise Ratio
+7. `metrics_throughput.png`: Bits per second
+8. `metrics_ber_vs_snr.png`: BER vs SNR (line graph)
+9. `metrics_ber_by_traffic.png`: BER by traffic type
+10. `metrics_energy_by_traffic.png`: Energy by traffic type
+11. `metrics_adc_bit_usage.png`: ADC bit usage ratio (5-bit vs 10-bit)
 
 ---
 
-#### **optimize_gains.py** (145 lines)
+#### **optimize_gains.py**
 **Role**: Utility to find optimal gain values for each traffic type
 
 **Key Functions**:
@@ -407,19 +404,19 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 
 ### Utility Modules
 
-#### **simulation_utils.py** (422 lines)
+#### **simulation_utils.py**
 **Role**: Helper functions and data collection
 
 **Key Classes**:
 - `TrafficFlowManager`: Generate traffic pattern sequence
-  - Cycles through: wake_up → sensor → voice → video → (gap) → repeat
+  - Cycles through: wake_up → lowpowersignal → highperformancesignal → (gap) → repeat
 
 - `TimeSeriesDataCollector`: Accumulate time-series data during simulation
-  - Tracks: time, traffic type, power (analog/digital), BER, FSM state, gain, SNR
+  - Tracks: time, traffic type, power (analog/digital), BER, gain, SNR
   - Limits storage to 100K points for memory efficiency
 
 - `SignalFieldDecoder`: Decode traffic type from signal field
-  - Maps 2-bit indication to traffic type
+  - Maps 2-bit indication to traffic type ("00", "01", "10")
   - Fallback to packet metadata if demodulation fails
 
 **Key Functions**:
@@ -440,13 +437,13 @@ if __name__ == "__main__":
 
 **Execution Flow**:
 1. Create 3 AGC models:
-   - `FixedLowPowerAGC()`
-   - `FixedHighPerformanceAGC()`
+   - `FixedLowPowerAGC()` (15dB, 5-bit)
+   - `FixedHighPerformanceAGC()` (40dB, 10-bit)
    - `AgcSystem(use_indicator_for_adc=True)` (Adaptive)
 
 2. For each model, call `run_one_model()`:
    - Execute `model.run_simulation(traffic_types, snr_range, packets_per_scenario)`
-   - Traffic types: sensor, voice, video
+   - Traffic types: lowpowersignal, highperformancesignal
    - SNR range: 5, 10, 15, 20 dB
    - 20 packets per SNR scenario
 
@@ -455,11 +452,17 @@ if __name__ == "__main__":
    - Total digital energy (pJ)
    - Average BER
    - Average latency (ms)
+   - Total operations (additions, multiplications)
+   - Energy efficiency, SQNR, throughput
 
-4. Generate 3 comparison graphs:
+4. Generate 11 comparison graphs:
    - Energy usage comparison
    - Accuracy (BER) comparison
    - Latency comparison
+   - Operations comparison
+   - Energy efficiency, SQNR, throughput
+   - BER vs SNR, BER by traffic, Energy by traffic
+   - ADC bit usage
 
 5. Save PNGs to current directory
 
@@ -470,7 +473,7 @@ if __name__ == "__main__":
 ```python
 agc_system = AgcSystem()
 sim_result = agc_system.run_simulation(
-    traffic_types=["sensor", "voice", "video"],
+    traffic_types=["lowpowersignal", "highperformancesignal"],
     snr_range_db=[5, 10, 15, 20],
     packets_per_scenario=20
 )
@@ -479,20 +482,24 @@ sim_result = agc_system.run_simulation(
 **Per-Simulation Steps** (for each SNR, each packet):
 1. Generate packet with specific traffic type
 2. Add AWGN noise to clean signal
-3. Process through RF path (select based on current FSM state)
-4. Apply ADC quantization
-5. **Block-by-block processing**:
+3. **Block-by-block processing** (실제 AGC 동작):
+   - Extract noisy block from received signal
+   - Apply RF amplification with current gain (UnifiedRFPath)
+   - Apply ADC 10-bit quantization
+   - Apply digital truncation (5-bit or 10-bit)
    - Run carrier sensing (saturation, energy, correlation)
-   - Calculate CS operations count
    - Extract signal field indication (if in signal field region)
-   - Check for ADC resolution update (adaptive mode)
-   - FSM state transition check
+   - Update digital bits based on traffic type (Adaptive mode only)
+   - **Gain feedback**: Measure peak → adjust gain for next block
+     - If peak > 0.9: gain -= 1dB (saturation 방지)
+     - If peak < 0.25: gain += 1dB (SNR 향상)
+     - Gain range: 10-50dB
    - Calculate BER on STF region
-   - Peak-based gain adjustment feedback
-   - Update power measurements
-6. Aggregate packet result with all sub-block metrics
-7. Return packet result containing:
-   - Final BER, FSM state, gain, ADC resolution
+   - Update power measurements (analog + digital)
+   - Collect block result
+4. Aggregate packet result with all sub-block metrics
+5. Return packet result containing:
+   - Final BER, gain, digital bits
    - Block-level results
    - Analog and digital power/energy
 
@@ -504,47 +511,48 @@ sim_result = agc_system.run_simulation(
 result = agc_system.process_packet(packet_info, channel_snr_db=10)
 ```
 
-**Input**: 
+**Input**:
 - `packet_info`: Dict with packet structure (STF/LTF/SF/payload indices, complete_signal, traffic_type)
 - `channel_snr_db`: Channel SNR in dB
 
 **Key Processing Steps**:
 
-1. **ADC Resolution Selection**:
-   - Adaptive mode: Start with 3-bit, await signal field indication for update
-   - Fixed modes: Locked to 3-bit or 10-bit
+1. **Digital Bits Selection**:
+   - Adaptive mode: Start with 5-bit, await signal field indication for update
+   - Fixed modes: Locked to 5-bit or 10-bit
 
 2. **Channel Simulation**: Add AWGN at specified SNR
 
-3. **RF Processing**:
-   - Select path: LowPowerPath (LOW_GAIN_LP) or HighPerfPath (other states)
-   - Apply gains and filtering
-
-4. **Block Loop** (process in chunks):
-   - Carrier sensing (3 methods, ~320-330 arithmetic ops)
-   - Check signal field region:
+3. **Block Loop** (process in chunks):
+   - **RF Processing**:
+     - Apply gain with UnifiedRFPath (LNA 20dB + VGA 가변)
+   - **ADC Quantization**:
+     - 항상 10-bit ADC 사용
+   - **Digital Truncation**:
+     - 5-bit 또는 10-bit로 truncate
+   - **Carrier Sensing**:
+     - 3 methods (~320-330 arithmetic ops)
+   - **Signal Field Decoding**:
      - If in signal field region and not extracted yet:
        - Decode traffic type from signal field bits
-       - (Adaptive mode) Update ADC resolution based on decoded traffic
-       - Reprocess block with new ADC
-   - FSM indication processing:
-     - Check if state change needed
-     - If changed, reprocess block with new configuration
-   - Gain feedback:
+       - (Adaptive mode) Update digital bits based on decoded traffic
+       - Reprocess block with new digital bits
+   - **Gain Feedback** (교수님 피드백: 순수 피드백 AGC):
      - Measure peak in block
      - If peak > 0.90: decrease gain by 1 dB
      - If peak < 0.25: increase gain by 1 dB
-     - Reprocess block if gain changed
-   - BER calculation (STF region only):
+     - Gain range clipped to 10-50 dB
+     - **중요**: 현재 블록은 재처리 안 함, 다음 블록에 새 gain 적용
+   - **BER Calculation** (STF region only):
      - Hard-decision demodulation: real > 0 → 1, else 0
      - XOR with reference STF bits
      - Count error rate (~680 arithmetic ops)
-   - Power measurements:
-     - Analog: State-dependent (low-power or high-perf IC model)
-     - Digital: Operation-dependent + area-based scaling
+   - **Power Measurements**:
+     - Analog: 항상 동일 (UnifiedRFPath)
+     - Digital: Operation-dependent + area-based scaling (비트 수에 비례)
    - Collect block result
 
-5. **Final Packet Computation**:
+4. **Final Packet Computation**:
    - Calculate packet-level BER from received signal
    - Aggregate all block results
    - Return result dict with all metrics
@@ -558,7 +566,7 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 - **matplotlib**: Plotting and graph generation
 - **scipy**: Statistical distributions (confidence intervals)
 - **collections**: defaultdict for data aggregation
-- **enum**: AgcState enumeration
+- **enum**: AgcState enumeration (제거됨, 이제 사용 안 함)
 - **abc**: Abstract base classes for power models
 - **os**: File operations (directory creation)
 - **typing**: Type hints (Dict, List, Tuple, Optional)
@@ -573,15 +581,14 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 
 ### Architectural Patterns
 
-1. **State Machine Pattern**
-   - `AgcFsm` implements FSM with discrete states
-   - Each state maps to specific gain/ADC configuration
-   - Transitions based on carrier sensing and signal field indication
-   - LUT (Look-Up Table) for state-dependent thresholds
+1. **Feedback Control Pattern** (교수님 피드백 반영)
+   - 순수 피드백 기반 AGC (FSM 제거)
+   - 신호 peak 측정 → gain 자동 조절 (10-50 dB 연속)
+   - 실제 AGC 시스템과 동일한 동작
 
 2. **Strategy Pattern**
    - Three AGC strategies: Low-Power, High-Perf, Adaptive
-   - Shared `AgcSystem` base class with different `process_packet()` implementations
+   - Shared `AgcSystem` base class with different configurations
    - Easy to add new strategies (e.g., predictive AGC)
 
 3. **Decorator/Wrapper Pattern**
@@ -591,12 +598,12 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 
 4. **Builder/Configuration Pattern**
    - Centralized `config.py` for all parameters
-   - Dictionary-based LUT for state thresholds
+   - Dictionary-based configuration
    - Configuration can be modified without code changes
 
 5. **Pipeline Pattern**
    - Packet processing flows through distinct stages:
-     Signal → RF Path → ADC → Block Loop → Result
+     Signal → RF Path → ADC → Digital Truncation → Block Loop → Result
    - Each stage modular and independently testable
 
 ### Naming Conventions
@@ -604,7 +611,6 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 - **Class names**: CamelCase (`AgcSystem`, `CarrierSensingTop`)
 - **Method names**: snake_case (`process_packet()`, `run_simulation()`)
 - **Constants**: UPPER_CASE (`SAMPLING_RATE`, `GAIN_LEVELS`)
-- **FSM states**: Descriptive with component (`LOW_GAIN_LP`, `HIGH_GAIN`)
 - **Variable names**: Descriptive with units (`power_mw`, `ber`, `gain_db`)
 
 ### Code Organization
@@ -613,8 +619,8 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
   - Signal generation separate from processing
   - Power models isolated in dedicated modules
   - Comparison logic in separate file
-  
-- **Modular components**: Each major subsystem (FSM, carrier sensing, BER, power) in its own file
+
+- **Modular components**: Each major subsystem (carrier sensing, BER, power) in its own file
 
 - **Utility extraction**: Common functions (plotting, data collection) in simulation_utils.py
 
@@ -623,11 +629,6 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 ## 7. Testing Approach
 
 ### Test Capabilities (Limited; Primarily Simulation-Based)
-
-**Unit-level self-tests** (in modules):
-- `agc_fsm.py`: `test_agc_fsm()` function at end
-  - Tests state transitions for various carrier sensing scenarios
-  - Validates output statistics
 
 **Integration testing** (via simulation):
 - `main_agc_system.py`: Full system runs can be executed
@@ -644,9 +645,9 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 
 1. Create `tests/` directory with unit tests for:
    - ADC quantization accuracy
-   - FSM state transition logic
+   - Gain feedback logic
    - BER calculation correctness
-   
+
 2. Implement pytest fixtures for common test scenarios
 
 3. Add golden-signal validation (pre-computed reference values)
@@ -672,28 +673,25 @@ pip install numpy scipy matplotlib
    - `DEFAULT_SNR_DB` (default: 10)
    - `NOISE_POWER` (default: 0.1)
 
-2. **Gain Settings** (GAIN_LEVELS):
+2. **Gain Settings** (Fixed 모델 참고용):
    ```python
    GAIN_LEVELS = {
-       "LOW_GAIN_LP": 10,      # dB
-       "LOW_GAIN_HP": 25,      # dB
-       "MEDIUM_GAIN": 35,      # dB
-       "HIGH_GAIN": 40,        # dB
+       "LOW_GAIN": 15,      # dB (저전력 모델)
+       "HIGH_GAIN": 40,     # dB (고성능 모델)
    }
    ```
 
-3. **ADC Resolution by Traffic**:
+3. **Digital Truncation Bits by Traffic**:
    ```python
-   TRAFFIC_ADC_RESOLUTION = {
-       "wake_up": 3,
-       "sensor":  4,
-       "voice":   8,
-       "video":   10
+   DIGITAL_TRUNCATION_BITS = {
+       "wake_up": 5,
+       "lowpowersignal":  5,
+       "highperformancesignal": 10
    }
    ```
 
-4. **Carrier Sensing Thresholds** (per state):
-   - Saturation threshold (ADC counts)
+4. **Carrier Sensing Thresholds**:
+   - Saturation threshold (5-bit: 15, 10-bit: 510)
    - Energy threshold (dBm)
    - Correlation threshold (0.0-1.0)
 
@@ -701,7 +699,11 @@ pip install numpy scipy matplotlib
    - `K_ADD_PER_SAMPLE`: Scaling factor for additions
    - `K_MUL_PER_SAMPLE`: Scaling factor for multiplications
 
-6. **Display/Debug Options**:
+6. **Analog Unification**:
+   - `UNIFIED_ANALOG_ALWAYS_ON`: True (항상 동일한 아날로그)
+   - `ADC_MAX_BITS`: 10 (ADC 고정 비트)
+
+7. **Display/Debug Options**:
    - `DEBUG_MODE`: Enable verbose logging
    - `PLOT_RESULTS`: Generate graphs
    - `SAVE_INTERMEDIATE_RESULTS`: Store intermediate data
@@ -715,7 +717,7 @@ python main_agc_system.py
 
 **Expected output**:
 - Console: Progress messages, metrics summaries
-- Files: `metrics_energy.png`, `metrics_accuracy.png`, `metrics_latency.png`
+- Files: 11 PNG files (metrics_*.png)
 
 **Comparison simulation** (alternative):
 ```bash
@@ -746,17 +748,17 @@ python optimize_gains.py
 | BPSK symbols | {-1+0j, +1+0j} | Modulation |
 | Upsampled signal | ±1.0 (normalized) | Baseband waveform |
 | After RF gain | ±10-100x | Amplified |
-| After ADC (3-bit) | [-4, 3] | Quantized |
 | After ADC (10-bit) | [-512, 511] | Quantized |
+| After Digital Truncation (5-bit) | [-16, 15] equivalent levels | Truncated |
 | Power (dB) | -100 to +20 dBm | Log scale |
 | BER | 0.0 to 1.0 | Normalized error rate |
 
 ### Quantization Effects
 
-- **3-bit ADC**: Coarse quantization, information loss, but low power
-- **10-bit ADC**: Fine quantization, high fidelity, but high power
+- **5-bit digital**: Coarse quantization, information loss, but low power
+- **10-bit digital**: Fine quantization, high fidelity, but high power
 
-System exploits this trade-off: use 3-bit for low-rate wake-up signals, 10-bit for high-bandwidth video.
+System exploits this trade-off: use 5-bit for low-rate lowpowersignal, 10-bit for high-bandwidth highperformancesignal.
 
 ---
 
@@ -786,23 +788,39 @@ snr_linear = 10^(snr_db / 10)
 noise_power = signal_power / snr_linear
 ```
 
-### ADC Quantization Step
+### ADC Quantization + Digital Truncation
 ```
-step_size = (2 * vref) / (2^bits)
-quantized = round(signal / step) * step
+# ADC 10-bit quantization
+step_size_10bit = (2 * vref) / 1024
+quantized_10bit = round(signal / step_size_10bit) * step_size_10bit
+
+# Digital truncation to 5-bit
+bit_shift = 10 - 5 = 5
+truncated_int = quantized_10bit_int >> 5  # 하위 5비트 버림
+truncated_int = truncated_int << 5        # 복원
+truncated = truncated_int * step_size_10bit
 ```
 
-### FSM Thresholds (Carrier Sensing)
+### Gain Feedback (순수 피드백 AGC)
 ```
-saturation: |real| >= threshold OR |imag| >= threshold
-energy: power_db > threshold_db
-correlation: max_correlation > threshold (0.6-0.85)
+peak = max(|signal_block|)
+if peak > 0.9:
+    gain_db -= 1  # Saturation 방지
+elif peak < 0.25:
+    gain_db += 1  # SNR 향상
+gain_db = clip(gain_db, 10, 50)  # 범위 제한
 ```
 
 ### Digital Energy (pJ)
 ```
-energy = (num_adds * power_per_add) + (num_mults * power_per_mult)
-         × area_scaling_factor
+energy = (num_adds * power_per_add + num_mults * power_per_mult) × area_scaling_factor
+area_scaling_factor = (current_bits² / reference_bits²)
+```
+
+### SQNR (Signal to Quantization Noise Ratio)
+```
+SQNR_dB = 6.02 × N + 1.76
+N = number of bits (5 or 10)
 ```
 
 ---
@@ -826,55 +844,192 @@ energy = (num_adds * power_per_add) + (num_mults * power_per_mult)
 - Power consumption is state-dependent only (not load-dependent)
 - Receiver always operates in normal mode (no low-power sleep)
 
-### Adaptive Selection Logic Limitation
+### Adaptive Selection Logic
 
-- ADC resolution selection happens **after** signal field extraction
-- This means initial processing uses default 3-bit, then might switch
+- Digital bits selection happens **after** signal field extraction
+- This means initial processing uses default 5-bit, then might switch to 10-bit
 - More optimal approach: use signal field indicator earlier (future work)
 
 ---
 
-## 12. Files Summary
+## 12. 교수님 피드백 상세 반영 내역 (Professor's Feedback Implementation Details)
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| main_agc_system.py | 713 | Main AGC system + comparison entry point |
-| agc_fsm.py | 268 | Finite state machine for gain/ADC control |
-| carrier_sensing.py | 394 | Packet detection (saturation, energy, correlation) |
-| signal_generator.py | 228 | PHY packet generation (BPSK modulation) |
-| ber_calculator.py | 250 | Bit error rate measurement |
-| power_measurement.py | 159 | Power/energy aggregation |
-| analog_power_base.py | 100 | IC power models (MAX2829/MAX2830) |
-| rf_paths.py | 179 | RF front-end simulation (LNA, mixer, VGA, LPF) |
-| adc.py | 93 | ADC quantization (3-bit and 10-bit) |
-| digital.py | 80 | Digital circuit area models |
-| config.py | 93 | Centralized configuration parameters |
-| simulation_utils.py | 422 | Utilities (data collection, plotting, traffic flow) |
-| agc_comparison.py | 726 | Comparison of 3 AGC models |
-| optimize_gains.py | 145 | Gain optimization utility |
-| README.md | - | Project overview |
+### 1. 아날로그 단일화 (Unified Analog Architecture)
+
+**Before**:
+- Two RF paths: LowPowerPath, HighPerfPath
+- Two power models: MAX2829 (high), MAX2830 (low)
+- Power consumption depends on path selection
+
+**After** (교수님 피드백 반영):
+- Single RF path: UnifiedRFPath
+- Single power model: MAX2829 only
+- Power consumption always identical
+- Only gain varies (feedback control)
+
+```python
+# main_agc_system.py
+self.rf_path = UnifiedRFPath(lna_gain=20, vga_gain=20, lpf_alpha=0.2)
+# 항상 동일한 아날로그 회로 사용
+```
+
+### 2. ADC 및 디지털 Truncation
+
+**Before**:
+- Multiple ADC classes: ADC3bit, ADC5bit, ADC10bit
+- ADC resolution changes based on traffic type
+
+**After** (교수님 피드백 반영):
+- Single ADC: ADC10bit only (항상 10비트)
+- Digital truncation: 5-bit or 10-bit in digital domain
+
+```python
+# main_agc_system.py
+self.adc = ADC10bit(vref=1.0)  # 항상 10비트 ADC
+
+# ADC 양자화 + 디지털 truncation
+quantized_10bit = self.adc.quantize(signal)
+if self.current_digital_bits < 10:
+    truncated = self.adc.truncate_to_bits(quantized_10bit, self.current_digital_bits)
+```
+
+### 3. FSM 제거 및 순수 피드백 AGC
+
+**Before**:
+- FSM with 4 states: LOW_GAIN_LP, LOW_GAIN_HP, MEDIUM_GAIN, HIGH_GAIN
+- Fixed gain per state
+- State transitions based on carrier sensing + signal field
+
+**After** (교수님 피드백 반영):
+- No FSM, direct gain variable
+- Continuous gain adjustment (10-50 dB)
+- Peak-based feedback loop
+
+```python
+# main_agc_system.py
+self.current_gain_db = 30.0  # 초기 gain
+
+# Block-by-block feedback
+peak = max(abs(signal_block))
+if peak > 0.9:
+    self.current_gain_db -= 1
+elif peak < 0.25:
+    self.current_gain_db += 1
+self.current_gain_db = clip(self.current_gain_db, 10, 50)
+```
+
+### 4. Fixed 모델 Gain 고정
+
+**Before**:
+- Fixed models called parent process_packet()
+- Gain feedback still active → gain changes
+
+**After** (교수님 피드백 반영):
+- Added `enable_gain_feedback` flag
+- Fixed models: `enable_gain_feedback=False`
+- Gain stays constant
+
+```python
+# main_agc_system.py
+class FixedLowPowerAGC(AgcSystem):
+    def __init__(self):
+        super().__init__(enable_gain_feedback=False)  # Gain 고정
+        self.current_gain_db = 15.0
+
+class FixedHighPerformanceAGC(AgcSystem):
+    def __init__(self):
+        super().__init__(enable_gain_feedback=False)  # Gain 고정
+        self.current_gain_db = 40.0
+```
+
+### 5. 트래픽 타입 간소화
+
+**Before**:
+- 4 types: wake_up, sensor, voice, video
+- Complex mapping to states
+
+**After** (교수님 피드백 반영):
+- 3 types: wake_up, lowpowersignal, highperformancesignal
+- Simple binary choice: 5-bit or 10-bit
+
+```python
+# config.py
+TRAFFIC_INDICATION_MAPPING = {
+    "00": "wake_up",
+    "01": "lowpowersignal",
+    "10": "highperformancesignal",
+}
+
+DIGITAL_TRUNCATION_BITS = {
+    "wake_up": 5,
+    "lowpowersignal": 5,
+    "highperformancesignal": 10,
+}
+```
+
+### 6. 전력 비교 명확화
+
+**Before**:
+- Analog power differs between models
+- Difficult to isolate digital energy impact
+
+**After** (교수님 피드백 반영):
+- Analog power identical for all models
+- Digital energy is the only variable
+- Clear comparison: Low-Power (5-bit) vs High-Perf (10-bit) vs Adaptive (5/10-bit)
+
+```python
+# power_measurement.py
+def calculate_power(self, state_name: str, is_low_power: bool = False):
+    if UNIFIED_ANALOG_ALWAYS_ON:
+        return self.model.get_power('RX')  # 항상 동일
+```
 
 ---
 
-## 13. Example Usage
+## 13. Files Summary
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| main_agc_system.py | ~1000 | Main AGC system + comparison entry point + Fixed models |
+| carrier_sensing.py | ~394 | Packet detection (saturation, energy, correlation) |
+| signal_generator.py | ~228 | PHY packet generation (BPSK modulation) |
+| ber_calculator.py | ~250 | Bit error rate measurement |
+| power_measurement.py | ~160 | Power/energy aggregation (analog + digital) |
+| analog_power_base.py | ~100 | IC power models (MAX2829) |
+| rf_paths.py | ~220 | RF front-end simulation (UnifiedRFPath, LNA, VGA, LPF) |
+| adc.py | ~130 | ADC quantization (10-bit) + digital truncation |
+| digital.py | ~80 | Digital circuit area models |
+| config.py | ~98 | Centralized configuration parameters |
+| simulation_utils.py | ~422 | Utilities (data collection, plotting, traffic flow) |
+| agc_comparison.py | ~726 | Comparison of 3 AGC models + extended metrics |
+| optimize_gains.py | ~145 | Gain optimization utility |
+| README.md | - | Project overview |
+| CLAUDE.md | - | This documentation file |
+
+**Deleted Files** (after FSM removal):
+- agc_fsm.py (268 lines) - No longer needed
+
+---
+
+## 14. Example Usage
 
 ### Basic Single Simulation
 ```python
 from main_agc_system import AgcSystem
 from signal_generator import SignalGenerator
 
-# Create system
-agc = AgcSystem()
+# Create system (Adaptive AGC)
+agc = AgcSystem(use_indicator_for_adc=True, enable_gain_feedback=True)
 sg = SignalGenerator()
 
 # Generate and process one packet
-packet = sg.create_complete_packet("video")
+packet = sg.create_complete_packet("highperformancesignal")
 result = agc.process_packet(packet, channel_snr_db=15)
 
 print(f"BER: {result['final_ber']['ber']:.6f}")
 print(f"Analog energy: {result['analog_power']['total_energy_mj']:.2f} mJ")
 print(f"Digital energy: {result['digital_computation']['total_energy_pj']:.2f} pJ")
-print(f"Final state: {result['final_fsm_state']}")
 print(f"Final gain: {result['final_gain_db']} dB")
 ```
 
@@ -882,11 +1037,11 @@ print(f"Final gain: {result['final_gain_db']} dB")
 ```python
 from main_agc_system import AgcSystem
 
-agc = AgcSystem(use_correlation_detection=True)  # Adaptive
+agc = AgcSystem(use_indicator_for_adc=True, enable_gain_feedback=True)
 
 # Run full simulation
 sim_result = agc.run_simulation(
-    traffic_types=["sensor", "voice", "video"],
+    traffic_types=["lowpowersignal", "highperformancesignal"],
     snr_range_db=[5, 10, 15, 20],
     packets_per_scenario=10
 )
@@ -901,49 +1056,74 @@ if __name__ == "__main__":
     # This is what main_agc_system.py does:
     # 1. Run 3 models (Low-Power, High-Perf, Adaptive)
     # 2. Collect metrics for each
-    # 3. Generate comparison graphs
+    # 3. Generate 11 comparison graphs
     exec(open("main_agc_system.py").read())
+```
+
+### Fixed Models
+```python
+from main_agc_system import FixedLowPowerAGC, FixedHighPerformanceAGC
+
+# Low-Power Fixed: 15dB gain, 5-bit digital
+low_power = FixedLowPowerAGC()
+result_lp = low_power.process_packet(packet, channel_snr_db=10)
+
+# High-Performance Fixed: 40dB gain, 10-bit digital
+high_perf = FixedHighPerformanceAGC()
+result_hp = high_perf.process_packet(packet, channel_snr_db=10)
 ```
 
 ---
 
-## 14. Key Insights for AI Assistants
+## 15. Key Insights for AI Assistants
 
-1. **Primary Innovation**: Adaptive AGC dynamically selects ADC resolution based on detected traffic type, trading off power/performance on a per-packet basis vs fixed approaches
+1. **Primary Innovation**: Adaptive AGC dynamically selects digital truncation bits based on detected traffic type, trading off power/performance on a per-packet basis vs fixed approaches
 
-2. **Signal Processing Foundation**: Uses standard DSP techniques (BPSK, matched filtering via correlation, hard-decision detection)
+2. **교수님 핵심 피드백**:
+   - 아날로그는 항상 동일 (UnifiedRFPath, 전력 동일)
+   - 디지털만 변경 (5-bit vs 10-bit truncation)
+   - FSM 제거, 순수 피드백 AGC
 
-3. **Hardware-Software Co-Design**: Models both analog RF frontend (power consumption) and digital backend (area + operation count)
+3. **Signal Processing Foundation**: Uses standard DSP techniques (BPSK, matched filtering via correlation, hard-decision detection)
 
-4. **Comparative Evaluation**: Three competing approaches evaluated on identical traffic/channel conditions for fair comparison
+4. **Hardware-Software Co-Design**: Models both analog RF frontend (power consumption) and digital backend (area + operation count)
 
-5. **Packet Structure**: Uses standard wireless preamble structure (STF for detection, LTF for channel, signal field for metadata)
+5. **Comparative Evaluation**: Three competing approaches evaluated on identical traffic/channel conditions for fair comparison
 
-6. **Trade-offs Explicitly Modeled**:
-   - 3-bit ADC: Lower power, lower accuracy
-   - 10-bit ADC: Higher power, higher accuracy
+6. **Packet Structure**: Uses standard wireless preamble structure (STF for detection, LTF for channel, signal field for metadata)
+
+7. **Trade-offs Explicitly Modeled**:
+   - 5-bit digital: Lower power, lower accuracy
+   - 10-bit digital: Higher power, higher accuracy
    - Adaptive: Selects based on content type
 
-7. **Energy Modeling**: Combines state-dependent analog power (IC model) + operation-count digital energy (area-based scaling)
+8. **Energy Modeling**: Combines state-independent analog power (항상 동일) + operation-count digital energy (비트 수에 비례)
 
-8. **Practical Constraints**:
+9. **Practical Constraints**:
    - Real system would need Rayleigh fading, interference
-   - AGC loop would be continuous, not discrete states
+   - AGC loop is simplified (peak-based feedback)
    - Signal field decoding would be probabilistic
+
+10. **Real AGC Operation**:
+    - Block-by-block processing (not whole-signal)
+    - RF amplification and ADC quantization separated
+    - Gain feedback applied to next block (not current)
 
 ---
 
-## 15. Extending the System
+## 16. Extending the System
 
 ### Potential Enhancements
 
 1. **Channel Models**: Implement Rayleigh fading, multipath propagation
 2. **Advanced Carrier Sensing**: Frequency-domain analysis, cyclostationary detection
-3. **Machine Learning**: Train neural network to predict optimal ADC resolution
+3. **Machine Learning**: Train neural network to predict optimal digital bits
 4. **Hardware Implementation**: Generate C/HDL from Python models
-5. **Real-Time Optimization**: Implement actual AGC feedback loop (currently just peak-based)
+5. **Real-Time Optimization**: Implement actual AGC feedback loop (currently simplified)
 6. **Additional Metrics**: Phase error, gain deviation, settling time
 7. **Multi-User Scenarios**: Interference modeling and mitigation
+8. **More Traffic Types**: Add more granular traffic categories
+9. **Adaptive Thresholds**: Make carrier sensing thresholds adaptive
 
 ---
 
@@ -951,3 +1131,4 @@ if __name__ == "__main__":
 
 This is an academic/research project focusing on AGC design tradeoffs in multi-traffic wireless receivers. All components are self-contained Python implementations suitable for simulation and education purposes.
 
+**교수님 피드백 완전 반영 완료** (Professor's Feedback Fully Implemented)
