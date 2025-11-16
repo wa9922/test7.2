@@ -119,7 +119,8 @@ class FixedLowPowerAGC(AgcSystem):
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
         # initial_digital_bits=5: 항상 5비트 사용
-        super().__init__(initial_digital_bits=5, use_correlation_detection=False)
+        # enable_gain_feedback=False: gain 피드백 비활성화 (고정 모델)
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=False)
         self.mode_name = "Low-Power Fixed AGC (5-bit)"
         # FSM 제거: 직접 gain 설정
         self.current_gain_db = 15.0  # 15 dB 고정
@@ -161,7 +162,8 @@ class FixedHighPerformanceAGC(AgcSystem):
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
         # initial_digital_bits=10: 항상 10비트 사용
-        super().__init__(initial_digital_bits=10, use_correlation_detection=False)
+        # enable_gain_feedback=False: gain 피드백 비활성화 (고정 모델)
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=False)
         self.mode_name = "High-Performance Fixed AGC (10-bit)"
         # FSM 제거: 직접 gain 설정
         self.current_gain_db = 40.0  # 40 dB 고정

@@ -50,19 +50,21 @@ PLOTS_OUTDIR = "."   # 저장 경로(필요 시 변경)
 class AgcSystem:
     DEFAULT_BLOCK_DURATION_MS = 1.0  # 블록 처리 시간
 
-    def __init__(self, initial_digital_bits: int = 10, use_correlation_detection: bool = True):
+    def __init__(self, initial_digital_bits: int = 10, use_correlation_detection: bool = True, enable_gain_feedback: bool = True):
         """
         AGC 시스템 초기화 (교수님 피드백 반영: Unified Analog, FSM 제거)
 
         Args:
             initial_digital_bits: 디지털 처리 시작 비트 수 (5 또는 10)
             use_correlation_detection: correlation detection 사용 여부
+            enable_gain_feedback: gain 피드백 활성화 여부 (Fixed 모델은 False)
         """
         print("=" * 60)
         print("Initializing Adaptive AGC Control System (Unified Analog, Pure Feedback)")
         print("=" * 60)
 
         self.use_correlation_detection = use_correlation_detection
+        self.enable_gain_feedback = enable_gain_feedback  # Gain feedback 제어
 
         # 순수 피드백 기반 AGC: FSM 제거, 직접 gain 변수 사용
         self.current_gain_db: float = 30.0  # 초기 gain: 30 dB (중간값)
@@ -191,21 +193,18 @@ class AgcSystem:
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 10) -> Dict:
         self.current_traffic_type = packet_info['traffic_type']
 
-        # 제안모델: indicator 디코딩 전까지 3-bit로
+        # 제안모델: indicator 디코딩 전까지 5-bit digital로 시작
         if self.use_indicator_for_adc:
-            if self.current_adc_resolution != 3:
-                self.current_adc_resolution = 3
-                if hasattr(self.carrier_sensing, 'update_resolution'):
-                    self.carrier_sensing.update_resolution(3)
-                else:
-                    self.carrier_sensing = CarrierSensingTop(3)
+            # 초기에는 5-bit digital truncation
+            self.current_digital_bits = 5
         else:
             # (종래/레거시) 메타 기반 설정
             self.update_adc_resolution_for_traffic(self.current_traffic_type)
 
         if DEBUG_MODE:
             print(f"\n--- Processing Packet: {packet_info['traffic_type']} ---")
-            print(f"    ADC Resolution (start): {self.current_adc_resolution} bits")
+            print(f"    ADC Resolution (hardware): {self.current_adc_resolution} bits (always 10-bit)")
+            print(f"    Digital bits (start): {self.current_digital_bits} bits")
 
         self._signal_field_extracted = False
 
@@ -272,24 +271,26 @@ class AgcSystem:
                     signal_block = quantized_block
 
             # 6. Gain 피드백 (실제 AGC의 핵심! FSM 제거)
-            # 현재 블록의 peak를 측정하여 다음 블록에 적용할 gain 조절
-            peak_blk = float(np.max(np.abs(signal_block))) if len(signal_block) > 0 else 0.0
-            step_db = 0.0
-            if peak_blk > HIGH_THR + EPS:
-                # 신호가 너무 크면 gain 감소 (saturation 방지)
-                step_db = -STEP_DB
-            elif peak_blk < LOW_THR - EPS:
-                # 신호가 너무 작으면 gain 증가 (SNR 향상)
-                step_db = +STEP_DB
+            # Fixed 모델은 gain feedback 비활성화
+            step_db = 0.0  # 초기화 (gain_changed 플래그용)
+            if self.enable_gain_feedback:
+                # 현재 블록의 peak를 측정하여 다음 블록에 적용할 gain 조절
+                peak_blk = float(np.max(np.abs(signal_block))) if len(signal_block) > 0 else 0.0
+                if peak_blk > HIGH_THR + EPS:
+                    # 신호가 너무 크면 gain 감소 (saturation 방지)
+                    step_db = -STEP_DB
+                elif peak_blk < LOW_THR - EPS:
+                    # 신호가 너무 작으면 gain 증가 (SNR 향상)
+                    step_db = +STEP_DB
 
-            if step_db != 0.0:
-                # Gain 업데이트 (다음 블록에 적용됨!)
-                old_gain = self.current_gain_db
-                self.current_gain_db = np.clip(self.current_gain_db + step_db, 10, 50)  # Gain 범위 제한
-                self.update_system_configuration()
-                if DEBUG_MODE:
-                    print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
-                # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
+                if step_db != 0.0:
+                    # Gain 업데이트 (다음 블록에 적용됨!)
+                    old_gain = self.current_gain_db
+                    self.current_gain_db = np.clip(self.current_gain_db + step_db, 10, 50)  # Gain 범위 제한
+                    self.update_system_configuration()
+                    if DEBUG_MODE:
+                        print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
+                    # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
 
             # BER (STF 구간만)
             ber_result = None
@@ -569,7 +570,7 @@ class FixedLowPowerAGC(AgcSystem):
     """저전력 고정 AGC - 항상 15dB gain / 5-bit digital"""
 
     def __init__(self):
-        super().__init__(initial_digital_bits=5, use_correlation_detection=False)
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=False)
         self.current_gain_db = 15.0  # 고정 gain
         self.current_digital_bits = 5  # 고정 5-bit
         self.current_gain_linear = 10**(15/20)
@@ -591,7 +592,7 @@ class FixedHighPerformanceAGC(AgcSystem):
     """고성능 고정 AGC - 항상 40dB gain / 10-bit digital"""
 
     def __init__(self):
-        super().__init__(initial_digital_bits=10, use_correlation_detection=False)
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=False)
         self.current_gain_db = 40.0  # 고정 gain
         self.current_digital_bits = 10  # 고정 10-bit
         self.current_gain_linear = 10**(40/20)
