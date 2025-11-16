@@ -25,7 +25,6 @@ from scipy import stats
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
-from agc_fsm import AgcFsm, AgcState
 from carrier_sensing import CarrierSensingTop
 from signal_generator import SignalGenerator
 from ber_calculator import BERCalculator
@@ -53,19 +52,21 @@ class AgcSystem:
 
     def __init__(self, initial_digital_bits: int = 10, use_correlation_detection: bool = True):
         """
-        AGC 시스템 초기화 (교수님 피드백 반영: Unified Analog)
+        AGC 시스템 초기화 (교수님 피드백 반영: Unified Analog, FSM 제거)
 
         Args:
             initial_digital_bits: 디지털 처리 시작 비트 수 (5 또는 10)
             use_correlation_detection: correlation detection 사용 여부
         """
         print("=" * 60)
-        print("Initializing Adaptive AGC Control System (Unified Analog)")
+        print("Initializing Adaptive AGC Control System (Unified Analog, Pure Feedback)")
         print("=" * 60)
 
         self.use_correlation_detection = use_correlation_detection
 
-        self.fsm = AgcFsm()
+        # 순수 피드백 기반 AGC: FSM 제거, 직접 gain 변수 사용
+        self.current_gain_db: float = 30.0  # 초기 gain: 30 dB (중간값)
+
         self.signal_generator = SignalGenerator()
         self.ber_calculator = BERCalculator()
 
@@ -89,14 +90,13 @@ class AgcSystem:
         self.time_series_collector = TimeSeriesDataCollector()
         self.signal_field_decoder = SignalFieldDecoder()
 
-        self.current_gain_linear: float = 10**(self.fsm.get_current_gain() / 20.0)
+        self.current_gain_linear: float = 10**(self.current_gain_db / 20.0)
         self.is_packet_detected: bool = False
         self.current_traffic_type: Optional[str] = None
 
         self.processing_history: List[Dict] = []
         self.gain_history: List[float] = []
         self.ber_history: List[float] = []
-        self.state_history: List[str] = []
         self.power_history: List[float] = []
 
         self._signal_field_extracted: bool = False
@@ -105,8 +105,7 @@ class AgcSystem:
         self.use_indicator_for_adc: bool = False
 
         print(f"AGC System initialized successfully")
-        print(f"Initial state: {self.fsm.current_state.value}")
-        print(f"Initial gain: {self.fsm.get_current_gain()} dB")
+        print(f"Initial gain: {self.current_gain_db} dB")
         print(f"ADC resolution (hardware): {self.current_adc_resolution} bits (always 10-bit)")
         print(f"Digital bits (processing): {self.current_digital_bits} bits (5 or 10)")
 
@@ -117,7 +116,7 @@ class AgcSystem:
         실제 AGC 동작: RF 증폭과 ADC 양자화를 분리하여
         블록 단위로 gain 피드백을 적용할 수 있도록 함
         """
-        gain_db = self.fsm.get_current_gain()
+        gain_db = self.current_gain_db
 
         # LNA gain은 고정, VGA gain으로 전체 gain 조절
         lna_gain = 20
@@ -181,11 +180,10 @@ class AgcSystem:
                     print(f"  (ADC hardware remains 10-bit, digital truncation applied)")
 
     def update_system_configuration(self) -> None:
+        """순수 피드백 AGC: gain만 업데이트 (FSM 제거)"""
         try:
-            new_gain_db = self.fsm.get_current_gain()
-            self.current_gain_linear = 10**(new_gain_db / 20.0)
-            self.gain_history.append(new_gain_db)
-            self.state_history.append(self.fsm.current_state.value)
+            self.current_gain_linear = 10**(self.current_gain_db / 20.0)
+            self.gain_history.append(self.current_gain_db)
         except Exception as e:
             if DEBUG_MODE:
                 print(f"Error updating system configuration: {e}")
@@ -273,17 +271,7 @@ class AgcSystem:
                     received_signal[block_idx:block_end] = quantized_block
                     signal_block = quantized_block
 
-            # 6. FSM 상태 전환 처리
-            state_changed = self.fsm.process_indication(cs_result["detection_methods"], signal_field_indication)
-            if state_changed:
-                self.update_system_configuration()
-                # 상태 변경 시 gain이 변경되었으므로 재처리
-                amplified_block = self.process_rf_only(noisy_block)
-                quantized_block = self.apply_adc_quantization(amplified_block)
-                received_signal[block_idx:block_end] = quantized_block
-                signal_block = quantized_block
-
-            # 7. Gain 피드백 (실제 AGC의 핵심!)
+            # 6. Gain 피드백 (실제 AGC의 핵심! FSM 제거)
             # 현재 블록의 peak를 측정하여 다음 블록에 적용할 gain 조절
             peak_blk = float(np.max(np.abs(signal_block))) if len(signal_block) > 0 else 0.0
             step_db = 0.0
@@ -296,21 +284,11 @@ class AgcSystem:
 
             if step_db != 0.0:
                 # Gain 업데이트 (다음 블록에 적용됨!)
-                new_gain = self.fsm.get_current_gain() + step_db
-                new_gain = np.clip(new_gain, 10, 50)  # Gain 범위 제한
-
-                if hasattr(self.fsm, "set_gain_db"):
-                    self.fsm.set_gain_db(new_gain)
-                elif hasattr(self.fsm, "apply_gain_delta"):
-                    self.fsm.apply_gain_delta(step_db)
-                elif hasattr(self.fsm, "current_gain_db"):
-                    self.fsm.current_gain_db = new_gain
-                else:
-                    self.fsm._current_gain_db = new_gain
-
+                old_gain = self.current_gain_db
+                self.current_gain_db = np.clip(self.current_gain_db + step_db, 10, 50)  # Gain 범위 제한
                 self.update_system_configuration()
                 if DEBUG_MODE:
-                    print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {new_gain-step_db:.1f} → {new_gain:.1f} dB")
+                    print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
                 # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
 
             # BER (STF 구간만)
@@ -337,12 +315,11 @@ class AgcSystem:
             processing_results.append({
                 "block_idx": block_idx,
                 "carrier_sensing": cs_result,
-                "fsm_state": self.fsm.current_state.value,
-                "gain_db": self.fsm.get_current_gain(),
+                "gain_db": self.current_gain_db,
                 "adc_resolution": self.current_adc_resolution,
                 "ber": ber_result,
                 "signal_power_db": block_power_db,
-                "state_changed": state_changed,
+                "gain_changed": (step_db != 0.0),
                 "time_ms": self.time_series_collector.get_current_time()
             })
 
@@ -351,8 +328,7 @@ class AgcSystem:
         packet_result = {
             "packet_info": packet_info,
             "channel_snr_db": channel_snr_db,
-            "final_fsm_state": self.fsm.current_state.value,
-            "final_gain_db": self.fsm.get_current_gain(),
+            "final_gain_db": self.current_gain_db,
             "final_adc_resolution": self.current_adc_resolution,
             "final_ber": final_ber_result,
             "block_results": processing_results,
@@ -416,7 +392,7 @@ class AgcSystem:
                                    cs_operations: Optional[Dict] = None,
                                    ber_operations: Optional[Dict] = None) -> None:
         """
-        전력 측정 업데이트 (교수님 피드백 반영)
+        전력 측정 업데이트 (교수님 피드백 반영, FSM 제거)
 
         - 아날로그: 항상 동일 (UnifiedRFPath 사용)
         - 디지털: current_digital_bits에 따라 연산량 변경
@@ -424,12 +400,13 @@ class AgcSystem:
         # 아날로그는 항상 동일 (통일된 RF path)
         # is_low_power 플래그는 여전히 유지 (호환성)
         is_low_power = False  # 아날로그는 항상 high-perf 모드 (통일됨)
+        state_name = "RUNNING"  # FSM 제거: 단순 상태 문자열
 
-        self.analog_power.update_power_measurement(self.fsm.current_state.value, block_duration_ms, is_low_power)
+        self.analog_power.update_power_measurement(state_name, block_duration_ms, is_low_power)
 
         # 디지털 연산량은 current_digital_bits에 비례
         self.digital_computation.update_computation(
-            self.fsm.current_state.value,
+            state_name,
             block_size,
             self.current_digital_bits,  # 5비트 또는 10비트
             cs_operations,
@@ -437,7 +414,7 @@ class AgcSystem:
             is_proposed_method=self.use_correlation_detection
         )
 
-        current_analog_power = self.analog_power.calculate_power(self.fsm.current_state.value, is_low_power)
+        current_analog_power = self.analog_power.calculate_power(state_name, is_low_power)
         current_time = self.time_series_collector.get_current_time()
         digital_power_avg = safe_divide(self.digital_computation.get_total_energy(), current_time, default=0.0)
 
@@ -446,8 +423,8 @@ class AgcSystem:
             analog_power=current_analog_power,
             digital_power=digital_power_avg,
             ber=ber_result['ber'] if ber_result else 0,
-            fsm_state=self.fsm.current_state.value,
-            gain=self.fsm.get_current_gain(),
+            fsm_state=state_name,
+            gain=self.current_gain_db,
             duration_ms=block_duration_ms
         )
 
@@ -586,53 +563,49 @@ class AgcSystem:
 
 
 # =========================
-# 종래모델 2개 (고정 동작)
+# 종래모델 2개 (고정 동작, FSM 제거)
 # =========================
 class FixedLowPowerAGC(AgcSystem):
-    """저전력 고정 AGC - 항상 LOW_GAIN_LP / 3-bit"""
+    """저전력 고정 AGC - 항상 15dB gain / 5-bit digital"""
 
     def __init__(self):
-        super().__init__(initial_adc_resolution=3, use_correlation_detection=False)
-        self.fsm.current_state = AgcState.LOW_GAIN_LP
-        self.current_gain_linear = 10**(10/20)
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False)
+        self.current_gain_db = 15.0  # 고정 gain
+        self.current_digital_bits = 5  # 고정 5-bit
+        self.current_gain_linear = 10**(15/20)
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        # 고정 세팅
-        self.fsm.current_state = AgcState.LOW_GAIN_LP
-        self.current_adc_resolution = 3
+        # 고정 세팅: gain과 digital bits 고정
+        self.current_gain_db = 15.0
+        self.current_digital_bits = 5
         # 적응 차단
-        original_ind = self.fsm.process_indication
-        self.fsm.process_indication = lambda *a, **k: False
         original_update = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda *a, **k: None
         try:
             return super().process_packet(packet_info, channel_snr_db)
         finally:
-            self.fsm.process_indication = original_ind
             self.update_adc_resolution_for_traffic = original_update
 
 
 class FixedHighPerformanceAGC(AgcSystem):
-    """고성능 고정 AGC - 항상 HIGH_GAIN / 10-bit"""
+    """고성능 고정 AGC - 항상 40dB gain / 10-bit digital"""
 
     def __init__(self):
-        super().__init__(initial_adc_resolution=10, use_correlation_detection=False)
-        self.fsm.current_state = AgcState.HIGH_GAIN
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False)
+        self.current_gain_db = 40.0  # 고정 gain
+        self.current_digital_bits = 10  # 고정 10-bit
         self.current_gain_linear = 10**(40/20)
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        # 고정 세팅
-        self.fsm.current_state = AgcState.HIGH_GAIN
-        self.current_adc_resolution = 10
+        # 고정 세팅: gain과 digital bits 고정
+        self.current_gain_db = 40.0
+        self.current_digital_bits = 10
         # 적응 차단
-        original_ind = self.fsm.process_indication
-        self.fsm.process_indication = lambda *a, **k: False
         original_update = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda *a, **k: None
         try:
             return super().process_packet(packet_info, channel_snr_db)
         finally:
-            self.fsm.process_indication = original_ind
             self.update_adc_resolution_for_traffic = original_update
 
 

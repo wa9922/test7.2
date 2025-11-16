@@ -15,8 +15,8 @@ def test_gain_performance(gain_db, traffic_type, snr_db=5.0, num_tests=10):
     # 테스트용 AGC 생성
     agc = FixedLowPowerAGC()
 
-    # 이득 설정 변경
-    agc.fsm.current_gain_index = 0
+    # 이득 설정 변경 (FSM 제거)
+    agc.current_gain_db = gain_db
     agc.current_gain_linear = 10**(gain_db/20)
 
     ber_results = []
