@@ -147,10 +147,92 @@ UnifiedRFPath + ADC10bit (항상 동일)
 
 ## 파일 수정 현황
 
+### Part 1 (완료)
 - ✅ config.py (완료)
 - ✅ adc.py (완료)
 - ✅ digital.py (완료)
 - ✅ rf_paths.py (완료)
-- ⏳ main_agc_system.py (진행중 - 매우 복잡)
-- ⏳ agc_comparison.py (대기)
 - ✅ BPSK 신호 처리 (검증 완료)
+
+### Part 2 (완료)
+- ✅ main_agc_system.py (완료)
+- ✅ agc_comparison.py (완료)
+
+## Part 2 상세 수정 내역
+
+### main_agc_system.py
+1. **`__init__()` 수정**:
+   - 파라미터 변경: `initial_adc_resolution` → `initial_digital_bits`
+   - 단일 ADC: `self.adc = ADC10bit(vref=1.0)` (10비트 고정)
+   - 단일 RF path: `self.rf_path = UnifiedRFPath(...)` (통일)
+   - 디지털 비트 추적: `self.current_digital_bits` 추가
+   - `DigitalAreaModel` 추가
+
+2. **`process_rf_signal()` 수정**:
+   - 듀얼 RF path 제거 (LowPowerPath, HighPerfPath)
+   - 통일된 `self.rf_path.run()` 사용
+   - Gain 피드백만 VGA로 조절
+
+3. **`apply_adc_quantization()` 수정**:
+   - 1단계: 항상 10비트 ADC로 양자화
+   - 2단계: `self.current_digital_bits`에 따라 디지털 truncation
+
+4. **`update_adc_resolution_for_traffic()` 수정**:
+   - `TRAFFIC_ADC_RESOLUTION` → `DIGITAL_TRUNCATION_BITS` 사용
+   - `self.current_adc_resolution` → `self.current_digital_bits` 업데이트
+   - carrier_sensing 업데이트 제거 (ADC 하드웨어는 항상 10비트)
+
+5. **`_update_power_measurements()` 수정**:
+   - 아날로그 전력: `is_low_power = False` (항상 통일)
+   - 디지털 연산량: `self.current_digital_bits` 전달
+
+6. **`main()` 수정**:
+   - Adaptive 모델: `initial_digital_bits=5`로 시작
+
+### agc_comparison.py
+1. **`FixedLowPowerAGC` 수정**:
+   - `initial_adc_resolution=3` → `initial_digital_bits=5`
+   - `self.current_adc_resolution = 3` → `self.current_digital_bits = 5`
+   - 모드 이름: "Low-Power Fixed AGC (5-bit)"
+   - 항상 5비트 truncation 사용
+
+2. **`FixedHighPerformanceAGC` 수정**:
+   - `initial_adc_resolution=10` → `initial_digital_bits=10`
+   - `self.current_adc_resolution = 10` → `self.current_digital_bits = 10`
+   - 모드 이름: "High-Performance Fixed AGC (10-bit)"
+   - 항상 10비트 전부 사용 (truncation 없음)
+
+## 최종 시스템 구조
+
+```
+입력 신호 (BPSK)
+    ↓
+UnifiedRFPath (항상 동일)
+├─ LNA (20 dB 고정)
+├─ Mixer
+├─ VGA (gain 피드백으로 조절)
+└─ LPF
+    ↓
+ADC10bit (항상 10비트 양자화)
+    ↓
+디지털 Truncation (선택)
+├─ FixedLowPower: 항상 5비트
+├─ FixedHighPerf: 항상 10비트
+└─ Adaptive: 5비트 또는 10비트 (트래픽 기반)
+    ↓
+디지털 처리 (BER, carrier sensing)
+연산량: n_bits에 비례
+    ↓
+출력
+```
+
+## 전력 비교 포인트
+
+| 구성 요소 | 종래1 (5-bit) | 종래2 (10-bit) | 제안 (Adaptive) |
+|---------|--------------|---------------|----------------|
+| **아날로그** | UnifiedRFPath | UnifiedRFPath | UnifiedRFPath |
+| **ADC 하드웨어** | 10-bit | 10-bit | 10-bit |
+| **디지털 비트** | 5-bit (truncate) | 10-bit (all) | 5/10-bit (선택) |
+| **아날로그 전력** | 동일 | 동일 | 동일 |
+| **디지털 전력** | 낮음 (5-bit 연산) | 높음 (10-bit 연산) | 중간 (적응형) |
+| **정확도 (BER)** | 낮음 | 높음 | 중간 |

@@ -3,15 +3,19 @@
 """
 메인 AGC(Automatic Gain Control) 시스템 시뮬레이션
 
+교수님 피드백 반영 (Unified Analog Architecture):
+- 아날로그: 항상 동일 (UnifiedRFPath, ADC 10-bit 고정)
+- 디지털: Truncation으로 5비트 또는 10비트 선택
+- 전력 비교는 디지털 연산량만 차이 (아날로그 전력 동일)
+
 요약:
 - 한 파일만 실행해서 모델 비교 그래프 3개만 저장
-- 모델: 종래 2개(Fixed Low-Power, Fixed High-Perf) + 제안(Adaptive)
-- 제안모델: Signal Field indicator 디코딩 시점에 TRAFFIC_ADC_RESOLUTION 기반으로 ADC 비트 선택
+- 모델: 종래 2개(Fixed 5-bit, Fixed 10-bit) + 제안(Adaptive 5/10-bit)
+- 제안모델: Signal Field indicator 디코딩 시점에 DIGITAL_TRUNCATION_BITS 기반으로 디지털 비트 선택
 - 그래프:
   1) metrics_energy.png   : 아날로그(mJ) / 디지털(pJ) 에너지 사용량 (모델별)
   2) metrics_accuracy.png : 평균 BER (모델별)
   3) metrics_latency.png  : 평균 지연(패킷당) (모델별)
-- 기존 비교 유틸 그래프 호출은 주석 처리
 """
 
 import os
@@ -25,10 +29,11 @@ from agc_fsm import AgcFsm, AgcState
 from carrier_sensing import CarrierSensingTop
 from signal_generator import SignalGenerator
 from ber_calculator import BERCalculator
-from config import SAMPLING_RATE, NOISE_POWER, DEBUG_MODE, PLOT_RESULTS, TRAFFIC_ADC_RESOLUTION
+from config import SAMPLING_RATE, NOISE_POWER, DEBUG_MODE, PLOT_RESULTS, TRAFFIC_ADC_RESOLUTION, DIGITAL_TRUNCATION_BITS
 from power_measurement import DigitalComputationMeasurement, AnalogPowerMeasurement
-from adc import ADC3bit, ADC10bit
-from rf_paths import HighPerfPath, LowPowerPath
+from adc import ADC5bit, ADC10bit
+from rf_paths import UnifiedRFPath
+from digital import DigitalAreaModel
 from simulation_utils import (
     TrafficFlowManager,
     TimeSeriesDataCollector,
@@ -46,9 +51,16 @@ PLOTS_OUTDIR = "."   # 저장 경로(필요 시 변경)
 class AgcSystem:
     DEFAULT_BLOCK_DURATION_MS = 1.0  # 블록 처리 시간
 
-    def __init__(self, initial_adc_resolution: int = 3, use_correlation_detection: bool = True):
+    def __init__(self, initial_digital_bits: int = 10, use_correlation_detection: bool = True):
+        """
+        AGC 시스템 초기화 (교수님 피드백 반영: Unified Analog)
+
+        Args:
+            initial_digital_bits: 디지털 처리 시작 비트 수 (5 또는 10)
+            use_correlation_detection: correlation detection 사용 여부
+        """
         print("=" * 60)
-        print("Initializing Adaptive AGC Control System")
+        print("Initializing Adaptive AGC Control System (Unified Analog)")
         print("=" * 60)
 
         self.use_correlation_detection = use_correlation_detection
@@ -57,14 +69,19 @@ class AgcSystem:
         self.signal_generator = SignalGenerator()
         self.ber_calculator = BERCalculator()
 
-        self.adc_lp = ADC3bit(vref=1.0)    # 3-bit
-        self.adc_hp = ADC10bit(vref=1.0)   # 10-bit
+        # 교수님 피드백 반영: 아날로그 단일화
+        # ADC는 항상 10비트로 동작
+        self.adc = ADC10bit(vref=1.0)  # Single 10-bit ADC (항상 고정)
+        self.current_adc_resolution = 10  # ADC 하드웨어는 항상 10비트
 
-        self.rf_high_perf = HighPerfPath(lna_gain=20, vga_gain=0, lpf_alpha=0.2)
-        self.rf_low_power = LowPowerPath(coarse_gain=6, fine_gain=0, lpf_alpha=0.2)
+        # RF 경로도 하나만 사용 (항상 동일한 아날로그 회로)
+        self.rf_path = UnifiedRFPath(lna_gain=20, vga_gain=20, lpf_alpha=0.2)
 
-        self.carrier_sensing = CarrierSensingTop(initial_adc_resolution)
-        self.current_adc_resolution = initial_adc_resolution
+        # 디지털 파트: truncation 비트 수만 변경 (5비트 또는 10비트)
+        self.current_digital_bits = initial_digital_bits  # 디지털 처리에 사용할 비트 수
+        self.digital_area_model = DigitalAreaModel()
+
+        self.carrier_sensing = CarrierSensingTop(self.current_adc_resolution)  # 항상 10비트
 
         self.analog_power = AnalogPowerMeasurement()
         self.digital_computation = DigitalComputationMeasurement()
@@ -90,44 +107,43 @@ class AgcSystem:
         print(f"AGC System initialized successfully")
         print(f"Initial state: {self.fsm.current_state.value}")
         print(f"Initial gain: {self.fsm.get_current_gain()} dB")
-        print(f"Initial ADC resolution: {self.current_adc_resolution} bits")
-
-    def _select_adc(self):
-        return self.adc_lp if self.current_adc_resolution <= 3 else self.adc_hp
-
-    def _select_rf_path(self):
-        return self.rf_low_power if self.fsm.current_state == AgcState.LOW_GAIN_LP else self.rf_high_perf
+        print(f"ADC resolution (hardware): {self.current_adc_resolution} bits (always 10-bit)")
+        print(f"Digital bits (processing): {self.current_digital_bits} bits (5 or 10)")
 
     def process_rf_signal(self, signal: np.ndarray) -> np.ndarray:
-        if self.fsm.current_state == AgcState.LOW_GAIN_LP:
-            gain_db = self.fsm.get_current_gain()
-            self.rf_low_power.set_gains(coarse_gain=gain_db*0.7, fine_gain=gain_db*0.3)
-            processed_signal = self.rf_low_power.run(signal)
-        else:
-            gain_db = self.fsm.get_current_gain()
-            lna_gain = 20
-            vga_gain = gain_db - 20
-            self.rf_high_perf.set_gains(lna_gain=lna_gain, vga_gain=vga_gain)
-            processed_signal = self.rf_high_perf.run(signal)
+        """
+        RF 신호 처리 (교수님 피드백 반영: 통일된 RF path)
+        아날로그는 항상 동일하게 동작, gain만 피드백으로 조절
+        """
+        gain_db = self.fsm.get_current_gain()
+
+        # LNA gain은 고정, VGA gain으로 전체 gain 조절
+        lna_gain = 20
+        vga_gain = max(0, gain_db - 20)  # VGA는 음수 불가
+
+        self.rf_path.set_gains(lna_gain=lna_gain, vga_gain=vga_gain)
+        processed_signal = self.rf_path.run(signal)
 
         return self.apply_adc_quantization(processed_signal)
 
     def apply_adc_quantization(self, signal: np.ndarray) -> np.ndarray:
-        adc_bits = self.current_adc_resolution
-        adc_levels = 2**adc_bits
-        adc_max = 2**(adc_bits - 1) - 1
-        adc_min = -(2**(adc_bits - 1))
+        """
+        ADC 양자화 + 디지털 truncation (교수님 피드백 반영)
 
-        signal_max = np.max(np.abs(signal))
-        if signal_max == 0:
-            return signal
+        1단계: 항상 10비트 ADC로 양자화
+        2단계: 디지털 단에서 self.current_digital_bits로 truncate
+        """
+        # 1단계: 10-bit ADC 양자화 (항상)
+        quantized_10bit = self.adc.quantize(signal)
 
-        normalized_signal = signal / signal_max * (adc_max * 0.95)
-        step_size = (adc_max - adc_min) / (adc_levels - 1)
-        quantized_signal = np.round(normalized_signal / step_size) * step_size
-        quantized_signal = np.clip(quantized_signal, adc_min, adc_max)
-        quantized_signal = quantized_signal * signal_max / (adc_max * 0.95)
-        return quantized_signal
+        # 2단계: 디지털 truncation (5비트 또는 10비트로)
+        if self.current_digital_bits < 10:
+            # 5비트로 truncate
+            truncated_signal = self.adc.truncate_to_bits(quantized_10bit, self.current_digital_bits)
+            return truncated_signal
+        else:
+            # 10비트 그대로 사용
+            return quantized_10bit
 
     def apply_agc_gain(self, signal: np.ndarray) -> np.ndarray:
         return self.process_rf_signal(signal)
@@ -141,16 +157,19 @@ class AgcSystem:
         return self.signal_field_decoder.decode_traffic_type(signal_field_signal, packet_info, use_simulation_mode=True)
 
     def update_adc_resolution_for_traffic(self, traffic_type: str) -> None:
-        if traffic_type in TRAFFIC_ADC_RESOLUTION:
-            new_resolution = TRAFFIC_ADC_RESOLUTION[traffic_type]
-            if new_resolution != self.current_adc_resolution:
-                self.current_adc_resolution = new_resolution
-                if hasattr(self.carrier_sensing, 'update_resolution'):
-                    self.carrier_sensing.update_resolution(new_resolution)
-                else:
-                    self.carrier_sensing = CarrierSensingTop(new_resolution)
+        """
+        트래픽 타입에 따라 디지털 처리 비트 수 업데이트 (교수님 피드백 반영)
+
+        ADC 하드웨어는 항상 10비트, 디지털 truncation만 변경
+        """
+        if traffic_type in DIGITAL_TRUNCATION_BITS:
+            new_digital_bits = DIGITAL_TRUNCATION_BITS[traffic_type]
+            if new_digital_bits != self.current_digital_bits:
+                old_bits = self.current_digital_bits
+                self.current_digital_bits = new_digital_bits
                 if DEBUG_MODE:
-                    print(f"ADC resolution updated to {new_resolution} bits for {traffic_type} traffic")
+                    print(f"Digital bits updated: {old_bits} → {new_digital_bits} bits for {traffic_type} traffic")
+                    print(f"  (ADC hardware remains 10-bit, digital truncation applied)")
 
     def update_system_configuration(self) -> None:
         try:
@@ -352,15 +371,23 @@ class AgcSystem:
                                    ber_result: Optional[Dict],
                                    cs_operations: Optional[Dict] = None,
                                    ber_operations: Optional[Dict] = None) -> None:
-        is_low_power = (self.current_traffic_type == 'wake_up' or
-                        self.fsm.current_state.value == 'LOW_GAIN_LP')
+        """
+        전력 측정 업데이트 (교수님 피드백 반영)
+
+        - 아날로그: 항상 동일 (UnifiedRFPath 사용)
+        - 디지털: current_digital_bits에 따라 연산량 변경
+        """
+        # 아날로그는 항상 동일 (통일된 RF path)
+        # is_low_power 플래그는 여전히 유지 (호환성)
+        is_low_power = False  # 아날로그는 항상 high-perf 모드 (통일됨)
 
         self.analog_power.update_power_measurement(self.fsm.current_state.value, block_duration_ms, is_low_power)
 
+        # 디지털 연산량은 current_digital_bits에 비례
         self.digital_computation.update_computation(
             self.fsm.current_state.value,
             block_size,
-            self.current_adc_resolution,
+            self.current_digital_bits,  # 5비트 또는 10비트
             cs_operations,
             ber_operations,
             is_proposed_method=self.use_correlation_detection
@@ -688,7 +715,8 @@ def main():
     metrics_hp = run_one_model("High-Perf Fixed", high_perf)
 
     # 3) 제안 모델 - Adaptive (indicator 기반 비트 선택)
-    adaptive = AgcSystem(initial_adc_resolution=3, use_correlation_detection=True)
+    # 5비트로 시작, signal field 디코딩 후 트래픽에 맞게 5/10비트 선택
+    adaptive = AgcSystem(initial_digital_bits=5, use_correlation_detection=True)
     adaptive.use_indicator_for_adc = True
     metrics_ad = run_one_model("Adaptive (Proposed)", adaptive)
 

@@ -110,32 +110,39 @@ def calculate_average_results(accumulated_results: Dict, traffic_types: List[str
 
 
 class FixedLowPowerAGC(AgcSystem):
-    """저전력 고정 AGC - 항상 최소 전력 모드"""
+    """
+    저전력 고정 AGC - 항상 최소 전력 모드 (교수님 피드백 반영)
+
+    - 아날로그: UnifiedRFPath (항상 동일)
+    - 디지털: 항상 5비트 truncation 사용
+    """
 
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
-        super().__init__(initial_adc_resolution=3, use_correlation_detection=False)
-        self.mode_name = "Low-Power Fixed AGC"
+        # initial_digital_bits=5: 항상 5비트 사용
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False)
+        self.mode_name = "Low-Power Fixed AGC (5-bit)"
         # 초기 상태를 저전력 모드로 설정 - 최적화된 이득
         self.fsm.current_state = AgcState.LOW_GAIN_LP
         self.fsm.current_gain_index = 0  # index for gain
         self.current_gain_linear = 10**(10/20)  # 10 dB linear gain (from config)
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        """패킷 처리 - 항상 저전력 모드 유지"""
+        """패킷 처리 - 항상 저전력 모드 유지 (5비트 디지털 truncation)"""
         # 매번 저전력 상태로 강제 설정 (config에서 10dB)
         self.fsm.current_state = AgcState.LOW_GAIN_LP
         self.fsm.current_gain_index = 0
         self.current_gain_linear = 10**(10/20)  # 10 dB (from config)
 
-        # ADC 해상도 고정 (3-bit) - 모든 트래픽에 대해
-        self.current_adc_resolution = 3
+        # 디지털 비트 고정 (5-bit truncation) - 모든 트래픽에 대해
+        # ADC 하드웨어는 여전히 10-bit
+        self.current_digital_bits = 5
 
         # FSM의 process_indication을 오버라이드하여 상태 변경 막기
         original_process = self.fsm.process_indication
         self.fsm.process_indication = lambda *args, **kwargs: False
 
-        # ADC 해상도 변경 막기
+        # 디지털 비트 변경 막기
         original_update_adc = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda traffic_type: None
 
@@ -150,38 +157,45 @@ class FixedLowPowerAGC(AgcSystem):
             # 상태가 변경되었을 수 있으므로 다시 강제 설정
             self.fsm.current_state = AgcState.LOW_GAIN_LP
             self.fsm.current_gain_index = 0
-            self.current_adc_resolution = 3
+            self.current_digital_bits = 5
 
         return result
 
 
 class FixedHighPerformanceAGC(AgcSystem):
-    """고성능 고정 AGC - 항상 최고 성능 모드"""
+    """
+    고성능 고정 AGC - 항상 최고 성능 모드 (교수님 피드백 반영)
+
+    - 아날로그: UnifiedRFPath (항상 동일)
+    - 디지털: 항상 10비트 전부 사용
+    """
 
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
-        super().__init__(initial_adc_resolution=10, use_correlation_detection=False)
-        self.mode_name = "High-Performance Fixed AGC"
+        # initial_digital_bits=10: 항상 10비트 사용
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False)
+        self.mode_name = "High-Performance Fixed AGC (10-bit)"
         # 초기 상태를 고성능 모드로 설정 - 최적화된 이득
         self.fsm.current_state = AgcState.HIGH_GAIN
         self.fsm.current_gain_index = 3  # index for gain
         self.current_gain_linear = 10**(40/20)  # 40 dB linear gain (from config)
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        """패킷 처리 - 항상 고성능 모드 유지"""
+        """패킷 처리 - 항상 고성능 모드 유지 (10비트 디지털 전부 사용)"""
         # 매번 고성능 상태로 강제 설정 (config에서 40dB)
         self.fsm.current_state = AgcState.HIGH_GAIN
         self.fsm.current_gain_index = 3
         self.current_gain_linear = 10**(40/20)  # 40 dB (from config)
 
-        # ADC 해상도 고정 (10-bit) - 모든 트래픽에 대해
-        self.current_adc_resolution = 10
+        # 디지털 비트 고정 (10-bit 전부 사용) - 모든 트래픽에 대해
+        # ADC 하드웨어는 10-bit (truncation 없음)
+        self.current_digital_bits = 10
 
         # FSM의 process_indication을 오버라이드하여 상태 변경 막기
         original_process = self.fsm.process_indication
         self.fsm.process_indication = lambda *args, **kwargs: False
 
-        # ADC 해상도 변경 막기
+        # 디지털 비트 변경 막기
         original_update_adc = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda traffic_type: None
 
@@ -196,7 +210,7 @@ class FixedHighPerformanceAGC(AgcSystem):
             # 상태가 변경되었을 수 있으므로 다시 강제 설정
             self.fsm.current_state = AgcState.HIGH_GAIN
             self.fsm.current_gain_index = 3
-            self.current_adc_resolution = 10
+            self.current_digital_bits = 10
 
         return result
 
