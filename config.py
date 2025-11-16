@@ -16,10 +16,11 @@ PAYLOAD_BITS      = 1024
 # GNURadio 호환: Complex는 float32 실수부 + float32 허수부 = 64비트
 BPSK_CONSTELLATION = {0: np.complex64(-1.0+0j), 1: np.complex64(+1.0+0j)}
 
-# --- FSM 이득 레벨 (교수님 피드백: 2가지로 간소화) ---
+# --- Gain 레벨 (FSM 제거됨, 참고용 설정) ---
+# Fixed 모델에서 사용하는 고정 gain 값
 GAIN_LEVELS = {
-    "LOW_GAIN": 15,   # dB (wake_up + lowpowersignal)
-    "HIGH_GAIN": 40,  # dB (highperformancesignal)
+    "LOW_GAIN": 15,   # dB (저전력 모델용)
+    "HIGH_GAIN": 40,  # dB (고성능 모델용)
 }
 
 # (기존) 트래픽별 ADC 해상도 정의는 더 이상 실제 ADC 비트 선택에 쓰지 않음.
@@ -38,12 +39,6 @@ DIGITAL_TRUNCATION_BITS = {
     "highperformancesignal": 10,     # 고성능 신호: 10비트
 }
 
-# FSM 상태 ↔ 트래픽 타입 매핑 (교수님 피드백: 2가지로 간소화)
-FSM_STATE_TO_TRAFFIC = {
-    "LOW_GAIN": "lowpowersignal",      # wake_up + lowpowersignal
-    "HIGH_GAIN": "highperformancesignal",
-}
-
 # --- Signal Field 매핑 (교수님 피드백: 3가지만, 중복 제거) ---
 TRAFFIC_INDICATION_MAPPING = {
     "00": "wake_up",
@@ -57,7 +52,8 @@ SATURATION_THRESHOLD = {"5bit":15, "10bit":510}  # 5비트: 32레벨 중 15, 10�
 ENERGY_DETECTION_THRESHOLD = -75
 CORRELATION_THRESHOLD = 0.6
 
-# --- LUT (교수님 피드백: 2가지로 간소화) ---
+# --- LUT (Look-Up Table) - Carrier Sensing 임계값 (참고용, FSM 제거됨) ---
+# 각 gain 레벨에서의 carrier sensing 임계값 설정
 LUT_THRESHOLDS = {
     "LOW_GAIN": {
         "saturation_th": SATURATION_THRESHOLD["5bit"],

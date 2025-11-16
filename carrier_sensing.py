@@ -30,10 +30,11 @@ class SaturationDetector:
         self.adc_resolution = adc_resolution
         self.max_value = 2**(adc_resolution-1) - 1  # 예: 10bit → 511
         self.min_value = -(2**(adc_resolution-1))   # 예: 10bit → -512
-        
+
         # 임계값 설정 (C++ 코드의 cs_thr에 해당)
-        if adc_resolution == 3:
-            self.threshold = SATURATION_THRESHOLD["3bit"]
+        # ADC는 항상 10비트, 디지털 truncation이 5비트 또는 10비트
+        if adc_resolution <= 5:
+            self.threshold = SATURATION_THRESHOLD["5bit"]
         else:
             self.threshold = SATURATION_THRESHOLD["10bit"]
         

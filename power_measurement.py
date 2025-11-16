@@ -18,7 +18,7 @@ class DigitalComputationMeasurement:
         self.computation_history: List[Dict] = []
         self.current_adc_bits = ADC_MAX_BITS  # 실제 ADC 최대 비트 (예: 10)
 
-    def update_computation(self, fsm_state: str, block_size: int, adc_bits: int = None,
+    def update_computation(self, state_name: str, block_size: int, adc_bits: int = None,
                            carrier_sensing_ops: Dict = None, ber_ops: Dict = None,
                            is_proposed_method: bool = True) -> None:
         if adc_bits is not None:
@@ -61,7 +61,7 @@ class DigitalComputationMeasurement:
         if len(self.computation_history) >= self.MAX_HISTORY_SIZE:
             self.computation_history.pop(0)
         self.computation_history.append({
-            'state': fsm_state,'block_size': block_size,'adc_bits': self.current_adc_bits,
+            'state': state_name,'block_size': block_size,'adc_bits': self.current_adc_bits,
             'mults': self.operation_counts['multiplications'],
             'adds':  self.operation_counts['additions'],
             'proposed_mults': self.operation_counts['proposed_multiplications'],
@@ -140,7 +140,7 @@ class AnalogPowerMeasurement:
         self.total_time_ms   += duration_ms
         self.power_history.append(p_mw)
 
-    def calculate_power(self, fsm_state: str, is_low_power: bool = False) -> float:
+    def calculate_power(self, state_name: str, is_low_power: bool = False) -> float:
         # 현재 모델에서는 상태/저전력 여부와 무관하게 항상 RX 전력 사용(단일 AGC)
         if UNIFIED_ANALOG_ALWAYS_ON:
             return self.model.get_power('RX')
