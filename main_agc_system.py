@@ -596,15 +596,47 @@ class FixedHighPerformanceAGC(AgcSystem):
 # 플랫/집계 & 3개 그래프
 # =========================
 def _flatten_packets(sim_result: Dict) -> List[Dict]:
+    """
+    패킷별 상세 데이터 추출 (확장됨)
+
+    추가된 데이터:
+    - SNR, 연산량, ADC 비트, 처리 블록 수
+    - Latency는 연산 복잡도 기반으로 개선
+    """
     flat: List[Dict] = []
     for scen in sim_result.get("scenarios", []):
+        snr_db = scen.get("snr_db", 10)  # 시나리오의 SNR
         for p in scen.get("packet_results", []):
+            digital_comp = p.get("digital_computation", {})
+
+            # 연산량 추출
+            total_adds = digital_comp.get("total_additions", 0)
+            total_mults = digital_comp.get("total_multiplications", 0)
+            total_ops = total_adds + total_mults
+
+            # 개선된 Latency 계산: 연산 복잡도 기반
+            # 가정: 1 addition = 0.001ms, 1 multiplication = 0.005ms
+            TIME_PER_ADD = 0.001  # ms
+            TIME_PER_MULT = 0.005  # ms
+            latency_computation_ms = (total_adds * TIME_PER_ADD + total_mults * TIME_PER_MULT)
+            latency_overhead_ms = float(p.get("processing_blocks", 0)) * 0.1  # 블록 처리 오버헤드
+            latency_total_ms = latency_computation_ms + latency_overhead_ms
+
+            # ADC 비트 추출 (digital_bits)
+            adc_bits = digital_comp.get("current_adc_bits", 10)
+
             flat.append({
                 "traffic": p["packet_info"]["traffic_type"],
+                "snr_db": snr_db,
                 "ber": float(p.get("final_ber", {}).get("ber", 0.0)),
                 "analog_total_mj": float(p.get("analog_power", {}).get("total_energy_mj", 0.0)),
-                "digital_total_pj": float(p.get("digital_computation", {}).get("total_energy_pj", 0.0)),
-                "latency_ms": float(p.get("processing_blocks", 0)) * float(AgcSystem.DEFAULT_BLOCK_DURATION_MS),
+                "digital_total_pj": float(digital_comp.get("total_energy_pj", 0.0)),
+                "latency_ms": latency_total_ms,
+                "total_additions": total_adds,
+                "total_multiplications": total_mults,
+                "total_operations": total_ops,
+                "adc_bits": adc_bits,
+                "processing_blocks": float(p.get("processing_blocks", 0)),
             })
     return flat
 
@@ -618,29 +650,108 @@ def _per_packet_delta(seq: List[float]) -> List[float]:
 
 def compute_model_metrics(sim_result: Dict) -> Dict[str, float]:
     """
-    모델 단위(전체) 메트릭 산출:
-      - total_analog_mj, total_digital_pj  (전체 누적)
-      - avg_ber, avg_latency_ms           (패킷 평균)
+    모델 단위(전체) 메트릭 산출 (확장됨)
+
+    기본 메트릭:
+      - total_analog_mj, total_digital_pj, avg_ber, avg_latency_ms
+
+    추가 메트릭:
+      - 연산량: total_operations, total_additions, total_multiplications
+      - 에너지 효율성: energy_efficiency_bits_per_joule
+      - SQNR: avg_sqnr_db
+      - Throughput: throughput_bps
+      - SNR별 BER: ber_by_snr
+      - 트래픽별 분석: ber_by_traffic, energy_by_traffic
+      - ADC 비트 선택: adc_bit_usage_ratio
     """
     rows = _flatten_packets(sim_result)
     if not rows:
         return dict(total_analog_mj=0.0, total_digital_pj=0.0, avg_ber=0.0, avg_latency_ms=0.0)
 
-    # 누적 → 최종값(전체)
+    # 기본 메트릭
     total_analog_mj = rows[-1]["analog_total_mj"]
     total_digital_pj = rows[-1]["digital_total_pj"]
-
     avg_ber = float(np.mean([r["ber"] for r in rows]))
     avg_latency_ms = float(np.mean([r["latency_ms"] for r in rows]))
 
-    return dict(
-        total_analog_mj=total_analog_mj,
-        total_digital_pj=total_digital_pj,
-        avg_ber=avg_ber,
-        avg_latency_ms=avg_latency_ms
-    )
+    # 연산량 메트릭
+    total_additions = rows[-1]["total_additions"]
+    total_multiplications = rows[-1]["total_multiplications"]
+    total_operations = total_additions + total_multiplications
+
+    # 에너지 효율성: bits/Joule
+    # 가정: 패킷당 1024 payload bits (config.py의 PAYLOAD_BITS)
+    total_bits_transmitted = len(rows) * 1024  # 총 전송 비트
+    total_energy_joule = (total_analog_mj / 1000.0) + (total_digital_pj / 1e12)  # mJ + pJ → Joule
+    energy_efficiency = total_bits_transmitted / total_energy_joule if total_energy_joule > 0 else 0
+
+    # SQNR: Signal to Quantization Noise Ratio
+    # SQNR = 6.02 * N + 1.76 (dB), N = ADC 비트 수
+    avg_adc_bits = float(np.mean([r["adc_bits"] for r in rows]))
+    avg_sqnr_db = 6.02 * avg_adc_bits + 1.76
+
+    # Throughput: bps (bits per second)
+    # 총 전송 비트 / 총 시간 (latency 합)
+    total_time_sec = sum(r["latency_ms"] for r in rows) / 1000.0  # ms → sec
+    throughput_bps = total_bits_transmitted / total_time_sec if total_time_sec > 0 else 0
+
+    # SNR별 BER 분석
+    ber_by_snr = {}
+    snr_values = sorted(set(r["snr_db"] for r in rows))
+    for snr in snr_values:
+        snr_rows = [r for r in rows if r["snr_db"] == snr]
+        ber_by_snr[f"snr_{int(snr)}db"] = float(np.mean([r["ber"] for r in snr_rows]))
+
+    # 트래픽 타입별 분석
+    ber_by_traffic = {}
+    energy_by_traffic = {}
+    traffic_types = set(r["traffic"] for r in rows)
+    for traffic in traffic_types:
+        traffic_rows = [r for r in rows if r["traffic"] == traffic]
+        ber_by_traffic[traffic] = float(np.mean([r["ber"] for r in traffic_rows]))
+        # 패킷 단위 에너지 (delta)
+        traffic_energies = [traffic_rows[i]["digital_total_pj"] -
+                           (traffic_rows[i-1]["digital_total_pj"] if i > 0 else 0)
+                           for i in range(len(traffic_rows))]
+        energy_by_traffic[traffic] = float(np.mean(traffic_energies)) if traffic_energies else 0
+
+    # ADC 비트 사용 비율 (5비트 vs 10비트)
+    bit_5_count = sum(1 for r in rows if r["adc_bits"] == 5)
+    bit_10_count = sum(1 for r in rows if r["adc_bits"] == 10)
+    total_count = len(rows)
+    adc_bit_5_ratio = (bit_5_count / total_count * 100) if total_count > 0 else 0
+    adc_bit_10_ratio = (bit_10_count / total_count * 100) if total_count > 0 else 0
+
+    return {
+        # 기본 메트릭
+        "total_analog_mj": total_analog_mj,
+        "total_digital_pj": total_digital_pj,
+        "avg_ber": avg_ber,
+        "avg_latency_ms": avg_latency_ms,
+
+        # 연산량 메트릭
+        "total_operations": total_operations,
+        "total_additions": total_additions,
+        "total_multiplications": total_multiplications,
+
+        # 효율성 메트릭
+        "energy_efficiency_bits_per_joule": energy_efficiency,
+        "avg_sqnr_db": avg_sqnr_db,
+        "throughput_bps": throughput_bps,
+
+        # 상세 분석
+        "ber_by_snr": ber_by_snr,
+        "ber_by_traffic": ber_by_traffic,
+        "energy_by_traffic": energy_by_traffic,
+
+        # ADC 비트 사용
+        "adc_bit_5_ratio": adc_bit_5_ratio,
+        "adc_bit_10_ratio": adc_bit_10_ratio,
+        "avg_adc_bits": avg_adc_bits,
+    }
 
 def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], outdir: str = "."):
+    """기존 3개 그래프: 에너지, 정확도, 지연"""
     labels = list(metrics_by_model.keys())
     analog = [metrics_by_model[k]["total_analog_mj"] for k in labels]
     digital = [metrics_by_model[k]["total_digital_pj"] for k in labels]
@@ -686,6 +797,190 @@ def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], out
     print("  ✓ Saved: metrics_latency.png")
 
 
+def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
+    """
+    확장 메트릭 그래프 (신규)
+
+    생성 그래프:
+    1. 연산량 (additions, multiplications, total)
+    2. 에너지 효율성 (bits/Joule)
+    3. SQNR
+    4. Throughput
+    5. SNR별 BER
+    6. 트래픽별 BER
+    7. 트래픽별 에너지
+    8. ADC 비트 사용 비율
+    """
+    labels = list(metrics_by_model.keys())
+
+    # 4) 연산량 (Additions, Multiplications, Total)
+    adds = [metrics_by_model[k]["total_additions"] for k in labels]
+    mults = [metrics_by_model[k]["total_multiplications"] for k in labels]
+    ops = [metrics_by_model[k]["total_operations"] for k in labels]
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15,5))
+    ax1.bar(labels, adds, color='skyblue')
+    ax1.set_title('Total Additions')
+    ax1.set_ylabel('Count')
+    ax1.grid(True, alpha=0.3)
+    ax1.tick_params(axis='x', rotation=15)
+
+    ax2.bar(labels, mults, color='salmon')
+    ax2.set_title('Total Multiplications')
+    ax2.set_ylabel('Count')
+    ax2.grid(True, alpha=0.3)
+    ax2.tick_params(axis='x', rotation=15)
+
+    ax3.bar(labels, ops, color='lightgreen')
+    ax3.set_title('Total Operations')
+    ax3.set_ylabel('Count')
+    ax3.grid(True, alpha=0.3)
+    ax3.tick_params(axis='x', rotation=15)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_operations.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_operations.png")
+
+    # 5) 에너지 효율성 (bits/Joule)
+    eff = [metrics_by_model[k]["energy_efficiency_bits_per_joule"] for k in labels]
+    plt.figure(figsize=(8,6))
+    plt.bar(labels, eff, color='gold')
+    plt.title('Energy Efficiency')
+    plt.ylabel('bits/Joule (higher is better)')
+    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=15)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_energy_efficiency.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_energy_efficiency.png")
+
+    # 6) SQNR
+    sqnr = [metrics_by_model[k]["avg_sqnr_db"] for k in labels]
+    plt.figure(figsize=(8,6))
+    plt.bar(labels, sqnr, color='orchid')
+    plt.title('Average SQNR (Signal to Quantization Noise Ratio)')
+    plt.ylabel('SQNR (dB)')
+    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=15)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_sqnr.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_sqnr.png")
+
+    # 7) Throughput
+    throughput = [metrics_by_model[k]["throughput_bps"] for k in labels]
+    plt.figure(figsize=(8,6))
+    plt.bar(labels, throughput, color='cyan')
+    plt.title('Throughput')
+    plt.ylabel('bps (bits per second)')
+    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=15)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_throughput.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_throughput.png")
+
+    # 8) SNR별 BER 성능
+    # 모든 모델의 SNR별 BER를 한 그래프에
+    snr_keys = sorted(metrics_by_model[labels[0]]["ber_by_snr"].keys())
+    plt.figure(figsize=(10,6))
+    for model_name in labels:
+        ber_values = [metrics_by_model[model_name]["ber_by_snr"][snr_key] for snr_key in snr_keys]
+        snr_labels = [snr_key.replace("snr_", "").replace("db", " dB") for snr_key in snr_keys]
+        plt.plot(snr_labels, ber_values, marker='o', label=model_name, linewidth=2)
+
+    plt.title('BER Performance vs SNR')
+    plt.xlabel('SNR')
+    plt.ylabel('BER (lower is better)')
+    plt.yscale('log')  # Log scale for BER
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_ber_vs_snr.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_ber_vs_snr.png")
+
+    # 9) 트래픽별 BER
+    traffic_types = sorted(metrics_by_model[labels[0]]["ber_by_traffic"].keys())
+    x_pos = np.arange(len(traffic_types))
+    width = 0.25
+
+    plt.figure(figsize=(10,6))
+    for i, model_name in enumerate(labels):
+        ber_values = [metrics_by_model[model_name]["ber_by_traffic"][tt] for tt in traffic_types]
+        plt.bar(x_pos + i*width, ber_values, width, label=model_name, alpha=0.8)
+
+    plt.title('BER by Traffic Type')
+    plt.xlabel('Traffic Type')
+    plt.ylabel('BER (lower is better)')
+    plt.xticks(x_pos + width, traffic_types)
+    plt.legend()
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_ber_by_traffic.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_ber_by_traffic.png")
+
+    # 10) 트래픽별 디지털 에너지
+    plt.figure(figsize=(10,6))
+    for i, model_name in enumerate(labels):
+        energy_values = [metrics_by_model[model_name]["energy_by_traffic"][tt] for tt in traffic_types]
+        plt.bar(x_pos + i*width, energy_values, width, label=model_name, alpha=0.8)
+
+    plt.title('Digital Energy by Traffic Type')
+    plt.xlabel('Traffic Type')
+    plt.ylabel('Energy per packet (pJ)')
+    plt.xticks(x_pos + width, traffic_types)
+    plt.legend()
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_energy_by_traffic.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_energy_by_traffic.png")
+
+    # 11) ADC 비트 사용 비율 (5비트 vs 10비트)
+    bit5_ratios = [metrics_by_model[k]["adc_bit_5_ratio"] for k in labels]
+    bit10_ratios = [metrics_by_model[k]["adc_bit_10_ratio"] for k in labels]
+
+    x_pos = np.arange(len(labels))
+    width = 0.35
+
+    plt.figure(figsize=(10,6))
+    plt.bar(x_pos - width/2, bit5_ratios, width, label='5-bit usage', color='lightblue')
+    plt.bar(x_pos + width/2, bit10_ratios, width, label='10-bit usage', color='lightcoral')
+
+    plt.title('ADC Bit Usage Ratio')
+    plt.xlabel('Model')
+    plt.ylabel('Usage Percentage (%)')
+    plt.xticks(x_pos, labels, rotation=15)
+    plt.legend()
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.ylim(0, 105)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_adc_bit_usage.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_adc_bit_usage.png")
+
+
+def plot_all_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
+    """모든 메트릭 그래프 생성 (기존 3개 + 확장 8개)"""
+    print("\n" + "="*80)
+    print("Generating all comparison graphs...")
+    print("="*80)
+
+    # 기존 3개 그래프
+    plot_three_metrics_models(metrics_by_model, outdir)
+
+    # 확장 8개 그래프
+    plot_extended_metrics(metrics_by_model, outdir)
+
+    print("\n" + "="*80)
+    print(f"All graphs saved to: {outdir}/")
+    print("Total: 11 comparison graphs generated")
+    print("="*80)
+
+
 # =========================
 # 메인: 세 모델을 각각 실행 → 비교 그래프 3개 저장
 # =========================
@@ -703,16 +998,16 @@ def run_one_model(model_name: str, model_obj: AgcSystem) -> Dict[str, float]:
 def main():
     print("=" * 100)
     print("Python-based AGC Comparison (Conventional vs Proposed)")
-    print("Single entrypoint, outputs 3 figures: energy/accuracy/latency (model-wise)")
+    print("Comprehensive metrics: energy, accuracy, latency, operations, efficiency, SQNR, throughput, etc.")
     print("=" * 100)
 
     # 1) 종래 모델 - Low-Power Fixed
     low_power = FixedLowPowerAGC()
-    metrics_lp = run_one_model("Low-Power Fixed", low_power)
+    metrics_lp = run_one_model("Low-Power Fixed (5-bit)", low_power)
 
     # 2) 종래 모델 - High-Perf Fixed
     high_perf = FixedHighPerformanceAGC()
-    metrics_hp = run_one_model("High-Perf Fixed", high_perf)
+    metrics_hp = run_one_model("High-Perf Fixed (10-bit)", high_perf)
 
     # 3) 제안 모델 - Adaptive (indicator 기반 비트 선택)
     # 5비트로 시작, signal field 디코딩 후 트래픽에 맞게 5/10비트 선택
@@ -720,19 +1015,17 @@ def main():
     adaptive.use_indicator_for_adc = True
     metrics_ad = run_one_model("Adaptive (Proposed)", adaptive)
 
-    # 모델별 메트릭 묶기 & 그래프 3종
+    # 모델별 메트릭 묶기 & 그래프 11종 생성
     metrics_by_model = {
-        "Low-Power Fixed": metrics_lp,
-        "High-Perf Fixed": metrics_hp,
+        "Low-Power Fixed (5-bit)": metrics_lp,
+        "High-Perf Fixed (10-bit)": metrics_hp,
         "Adaptive (Proposed)": metrics_ad
     }
     if not os.path.exists(PLOTS_OUTDIR):
         os.makedirs(PLOTS_OUTDIR, exist_ok=True)
-    plot_three_metrics_models(metrics_by_model, outdir=PLOTS_OUTDIR)
 
-    # (이전 기타 그래프 호출은 주석 처리)
-    # if PLOT_RESULTS:
-    #     ...
+    # 모든 메트릭 그래프 생성 (11개)
+    plot_all_metrics(metrics_by_model, outdir=PLOTS_OUTDIR)
 
     print(f"\nPlots saved to: {os.path.abspath(PLOTS_OUTDIR)}")
     print("\nDone.")
