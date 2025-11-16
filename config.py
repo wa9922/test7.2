@@ -16,42 +16,40 @@ PAYLOAD_BITS      = 1024
 # GNURadio 호환: Complex는 float32 실수부 + float32 허수부 = 64비트
 BPSK_CONSTELLATION = {0: np.complex64(-1.0+0j), 1: np.complex64(+1.0+0j)}
 
-# --- FSM 이득 레벨(그대로 두되, 아날로그 단일화 이후에도 동작) ---
+# --- FSM 이득 레벨 (교수님 피드백: 2가지로 간소화) ---
 GAIN_LEVELS = {
-    "LOW_GAIN_LP": 10,
-    "LOW_GAIN_HP": 25,
-    "MEDIUM_GAIN": 35,
-    "HIGH_GAIN": 40,
+    "LOW_GAIN": 15,   # dB (wake_up + lowpowersignal)
+    "HIGH_GAIN": 40,  # dB (highperformancesignal)
 }
 
 # (기존) 트래픽별 ADC 해상도 정의는 더 이상 실제 ADC 비트 선택에 쓰지 않음.
 # 대신, 아래 DIGITAL_TRUNCATION_BITS로 디지털 파이프라인에서 '잘라 쓰기'를 함.
 TRAFFIC_ADC_RESOLUTION = {
-    "wake_up": 5,   # 3비트 → 5비트로 변경 (quantization noise 감소)
-    "sensor":  5,
-    "voice":   10,
-    "video":   10,
+    "wake_up": 5,                    # wake-up 신호
+    "lowpowersignal":  5,            # 저전력 신호
+    "highperformancesignal": 10,     # 고성능 신호
 }
 
 # 디지털 파이프라인에서 사용할 "트렁케이션 비트 수"
 # ADC는 항상 10비트로 동작, 디지털 단에서 5비트 또는 10비트로 truncate
 DIGITAL_TRUNCATION_BITS = {
-    "wake_up": 5,   # 저전력: 5비트 사용
-    "sensor":  5,   # 저전력: 5비트 사용
-    "voice":   10,  # 고성능: 10비트 전부 사용
-    "video":   10   # 고성능: 10비트 전부 사용
+    "wake_up": 5,                    # wake-up: 5비트
+    "lowpowersignal":  5,            # 저전력 신호: 5비트
+    "highperformancesignal": 10,     # 고성능 신호: 10비트
 }
 
-# FSM 상태 ↔ 트래픽 타입 매핑
+# FSM 상태 ↔ 트래픽 타입 매핑 (교수님 피드백: 2가지로 간소화)
 FSM_STATE_TO_TRAFFIC = {
-    "LOW_GAIN_LP": "wake_up",
-    "LOW_GAIN_HP": "sensor",
-    "MEDIUM_GAIN": "voice",
-    "HIGH_GAIN":   "video",
+    "LOW_GAIN": "lowpowersignal",      # wake_up + lowpowersignal
+    "HIGH_GAIN": "highperformancesignal",
 }
 
-# --- Signal Field 매핑 ---
-TRAFFIC_INDICATION_MAPPING = {"00":"sensor","01":"voice","10":"video","11":"wake_up"}
+# --- Signal Field 매핑 (교수님 피드백: 3가지만, 중복 제거) ---
+TRAFFIC_INDICATION_MAPPING = {
+    "00": "wake_up",
+    "01": "lowpowersignal",
+    "10": "highperformancesignal",
+}
 SIGNAL_FIELD_STRUCTURE = {"traffic_type":2,"control_bits":2,"total_bits":4}
 
 # --- Carrier sensing ---
@@ -59,16 +57,20 @@ SATURATION_THRESHOLD = {"5bit":15, "10bit":510}  # 5비트: 32레벨 중 15, 10�
 ENERGY_DETECTION_THRESHOLD = -75
 CORRELATION_THRESHOLD = 0.6
 
-# --- LUT ---
+# --- LUT (교수님 피드백: 2가지로 간소화) ---
 LUT_THRESHOLDS = {
-    "LOW_GAIN_LP": {"saturation_th":SATURATION_THRESHOLD["5bit"],
-                    "energy_th":0.01,"corr_th":0.6,"gain_code":"0100"},
-    "LOW_GAIN_HP": {"saturation_th":SATURATION_THRESHOLD["10bit"]//4,
-                    "energy_th":0.05,"corr_th":0.7,"gain_code":"0110"},
-    "MEDIUM_GAIN": {"saturation_th":SATURATION_THRESHOLD["10bit"]//2,
-                    "energy_th":0.1,"corr_th":0.8,"gain_code":"1010"},
-    "HIGH_GAIN":   {"saturation_th":SATURATION_THRESHOLD["10bit"],
-                    "energy_th":0.2,"corr_th":0.85,"gain_code":"1110"},
+    "LOW_GAIN": {
+        "saturation_th": SATURATION_THRESHOLD["5bit"],
+        "energy_th": 0.05,
+        "corr_th": 0.7,
+        "gain_code": "0100"
+    },
+    "HIGH_GAIN": {
+        "saturation_th": SATURATION_THRESHOLD["10bit"],
+        "energy_th": 0.2,
+        "corr_th": 0.85,
+        "gain_code": "1110"
+    },
 }
 
 # --- BER ---

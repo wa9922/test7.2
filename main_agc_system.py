@@ -110,10 +110,12 @@ class AgcSystem:
         print(f"ADC resolution (hardware): {self.current_adc_resolution} bits (always 10-bit)")
         print(f"Digital bits (processing): {self.current_digital_bits} bits (5 or 10)")
 
-    def process_rf_signal(self, signal: np.ndarray) -> np.ndarray:
+    def process_rf_only(self, signal: np.ndarray) -> np.ndarray:
         """
-        RF 신호 처리 (교수님 피드백 반영: 통일된 RF path)
-        아날로그는 항상 동일하게 동작, gain만 피드백으로 조절
+        RF 증폭만 수행 (ADC 양자화 분리)
+
+        실제 AGC 동작: RF 증폭과 ADC 양자화를 분리하여
+        블록 단위로 gain 피드백을 적용할 수 있도록 함
         """
         gain_db = self.fsm.get_current_gain()
 
@@ -122,9 +124,16 @@ class AgcSystem:
         vga_gain = max(0, gain_db - 20)  # VGA는 음수 불가
 
         self.rf_path.set_gains(lna_gain=lna_gain, vga_gain=vga_gain)
-        processed_signal = self.rf_path.run(signal)
+        amplified_signal = self.rf_path.run(signal)
 
-        return self.apply_adc_quantization(processed_signal)
+        return amplified_signal
+
+    def process_rf_signal(self, signal: np.ndarray) -> np.ndarray:
+        """
+        RF 증폭 + ADC 양자화 (호환성용, 이전 코드와의 호환)
+        """
+        amplified = self.process_rf_only(signal)
+        return self.apply_adc_quantization(amplified)
 
     def apply_adc_quantization(self, signal: np.ndarray) -> np.ndarray:
         """
@@ -202,7 +211,7 @@ class AgcSystem:
 
         self._signal_field_extracted = False
 
-        # 채널: AWGN
+        # 채널: AWGN 노이즈 추가
         clean_signal = packet_info["complete_signal"]
         signal_power = np.mean(np.abs(clean_signal)**2)
         snr_linear = 10**(channel_snr_db / 10)
@@ -210,10 +219,11 @@ class AgcSystem:
         noise = np.sqrt(noise_power / 2) * (np.random.randn(len(clean_signal)) + 1j * np.random.randn(len(clean_signal)))
         noisy_signal = clean_signal + noise
 
-        # RF 경로
-        received_signal = self.process_rf_signal(noisy_signal)
+        # 실제 AGC 동작: 블록 단위로 처리 (전체 신호를 한 번에 처리하지 않음!)
+        # 각 블록마다 현재 gain으로 RF 증폭 → ADC 양자화 → Gain 피드백
+        received_signal = np.zeros_like(noisy_signal)  # 결과 저장용
 
-        # 블록 처리
+        # 블록 처리 준비
         stf_length_samples = packet_info["stf_end_idx"]
         block_size = calculate_block_size(stf_length_samples)
         processing_results = []
@@ -223,41 +233,72 @@ class AgcSystem:
         STEP_DB  = 1.0
         EPS      = 1e-12
 
-        for block_idx in range(0, len(received_signal), block_size):
-            block_end = min(block_idx + block_size, len(received_signal))
-            signal_block = received_signal[block_idx:block_end]
-            if len(signal_block) == 0:
+        for block_idx in range(0, len(noisy_signal), block_size):
+            block_end = min(block_idx + block_size, len(noisy_signal))
+
+            # ========== 실제 AGC 동작 ==========
+            # 1. 노이즈 신호에서 현재 블록 추출
+            noisy_block = noisy_signal[block_idx:block_end]
+            if len(noisy_block) == 0:
                 continue
 
+            # 2. 현재 gain으로 RF 증폭 (LNA + VGA)
+            amplified_block = self.process_rf_only(noisy_block)
+
+            # 3. ADC 양자화 (10비트) + 디지털 truncation (5 or 10비트)
+            quantized_block = self.apply_adc_quantization(amplified_block)
+
+            # 결과 저장
+            received_signal[block_idx:block_end] = quantized_block
+            signal_block = quantized_block
+            # ====================================
+
+            # 4. Carrier sensing (양자화된 신호로)
             cs_result = self.carrier_sensing.process_signal(signal_block)
             cs_operations = self._calculate_cs_operations(len(signal_block))
 
-            # indicator 첫 디코드 시점에 ADC 비트 확정
+            # 5. Signal field 디코딩 (트래픽 타입 파악)
             signal_field_indication = None
             if (block_idx >= packet_info["signal_field_start_idx"] and not self._signal_field_extracted):
                 signal_field_indication = self.extract_signal_field_indication(packet_info, received_signal)
                 self._signal_field_extracted = True
                 if self.use_indicator_for_adc and signal_field_indication:
+                    # 디지털 비트 수 업데이트 (5비트 또는 10비트로)
                     self.update_adc_resolution_for_traffic(signal_field_indication)
                     self.current_traffic_type = signal_field_indication
                     if DEBUG_MODE:
-                        print(f"[Indicator] traffic={signal_field_indication}, ADC={self.current_adc_resolution} bits")
-                    signal_block = self.process_rf_signal(noisy_signal[block_idx:block_end])
+                        print(f"[Indicator] traffic={signal_field_indication}, digital_bits={self.current_digital_bits}")
+                    # 재처리: 새로운 디지털 비트로 다시 양자화
+                    quantized_block = self.apply_adc_quantization(amplified_block)
+                    received_signal[block_idx:block_end] = quantized_block
+                    signal_block = quantized_block
 
+            # 6. FSM 상태 전환 처리
             state_changed = self.fsm.process_indication(cs_result["detection_methods"], signal_field_indication)
             if state_changed:
                 self.update_system_configuration()
-                signal_block = self.process_rf_signal(noisy_signal[block_idx:block_end])
+                # 상태 변경 시 gain이 변경되었으므로 재처리
+                amplified_block = self.process_rf_only(noisy_block)
+                quantized_block = self.apply_adc_quantization(amplified_block)
+                received_signal[block_idx:block_end] = quantized_block
+                signal_block = quantized_block
 
-            # 피크 기반 간단 gain 피드백
+            # 7. Gain 피드백 (실제 AGC의 핵심!)
+            # 현재 블록의 peak를 측정하여 다음 블록에 적용할 gain 조절
             peak_blk = float(np.max(np.abs(signal_block))) if len(signal_block) > 0 else 0.0
             step_db = 0.0
             if peak_blk > HIGH_THR + EPS:
+                # 신호가 너무 크면 gain 감소 (saturation 방지)
                 step_db = -STEP_DB
             elif peak_blk < LOW_THR - EPS:
+                # 신호가 너무 작으면 gain 증가 (SNR 향상)
                 step_db = +STEP_DB
+
             if step_db != 0.0:
+                # Gain 업데이트 (다음 블록에 적용됨!)
                 new_gain = self.fsm.get_current_gain() + step_db
+                new_gain = np.clip(new_gain, 10, 50)  # Gain 범위 제한
+
                 if hasattr(self.fsm, "set_gain_db"):
                     self.fsm.set_gain_db(new_gain)
                 elif hasattr(self.fsm, "apply_gain_delta"):
@@ -266,8 +307,11 @@ class AgcSystem:
                     self.fsm.current_gain_db = new_gain
                 else:
                     self.fsm._current_gain_db = new_gain
+
                 self.update_system_configuration()
-                signal_block = self.process_rf_signal(noisy_signal[block_idx:block_end])
+                if DEBUG_MODE:
+                    print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {new_gain-step_db:.1f} → {new_gain:.1f} dB")
+                # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
 
             # BER (STF 구간만)
             ber_result = None
@@ -408,7 +452,7 @@ class AgcSystem:
         )
 
     def run_simulation(self,
-                       traffic_types: List[str] = ["sensor", "voice", "video"],
+                       traffic_types: List[str] = ["lowpowersignal", "highperformancesignal"],
                        snr_range_db: List[float] = [5, 10, 15, 20],
                        packets_per_scenario: int = 20) -> Dict:
         print("=" * 80)
@@ -989,7 +1033,7 @@ def run_one_model(model_name: str, model_obj: AgcSystem) -> Dict[str, float]:
     print(f"Running model: {model_name}")
     print("="*100)
     sim = model_obj.run_simulation(
-        traffic_types=["sensor", "voice", "video"],
+        traffic_types=["lowpowersignal", "highperformancesignal"],
         snr_range_db=[5, 10, 15, 20],
         packets_per_scenario=20
     )

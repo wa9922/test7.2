@@ -11,20 +11,17 @@ from config import GAIN_LEVELS, LUT_THRESHOLDS, TRAFFIC_ADC_RESOLUTION, TRAFFIC_
 
 class AgcState(Enum):
     """
-    AGC FSM의 4가지 상태를 정의합니다.
-    각 상태는 다른 트래픽 유형과 이득 레벨에 대응됩니다.
+    AGC FSM의 2가지 상태를 정의합니다 (교수님 피드백: 간소화)
     """
-    LOW_GAIN_LP = "LOW_GAIN_LP"      # Standby, wake_up 트래픽
-    LOW_GAIN_HP = "LOW_GAIN_HP"      # Sensor 트래픽
-    MEDIUM_GAIN = "MEDIUM_GAIN"      # Voice 트래픽
-    HIGH_GAIN = "HIGH_GAIN"          # Video 트래픽
+    LOW_GAIN = "LOW_GAIN"      # wake_up + lowpowersignal
+    HIGH_GAIN = "HIGH_GAIN"    # highperformancesignal
 
 class AgcFsm:
     """AGC FSM 동작을 관리하는 클래스"""
     
     def __init__(self):
-        """FSM 초기화 - 항상 Standby 상태로 시작"""
-        self.current_state = AgcState.LOW_GAIN_LP
+        """FSM 초기화 - 항상 LOW_GAIN 상태로 시작"""
+        self.current_state = AgcState.LOW_GAIN
         self.previous_state = None
         
         # 상태 전이 히스토리
