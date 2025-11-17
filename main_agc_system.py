@@ -48,7 +48,7 @@ PLOTS_OUTDIR = "."   # 저장 경로(필요 시 변경)
 # 공통 AGC 시스템 (제안모델 로직 포함)
 # =========================
 class AgcSystem:
-    DEFAULT_BLOCK_DURATION_MS = 1.0  # 블록 처리 시간
+    BASE_BLOCK_DURATION_MS = 0.5  # 기본 블록 처리 시간 (5-bit 기준)
 
     def __init__(self, initial_digital_bits: int = 10, use_correlation_detection: bool = True, enable_gain_feedback: bool = True):
         """
@@ -182,6 +182,24 @@ class AgcSystem:
                     print(f"Digital bits updated: {old_bits} → {new_digital_bits} bits for {traffic_type} traffic")
                     print(f"  (ADC hardware remains 10-bit, digital truncation applied)")
 
+    def calculate_block_processing_time(self, digital_bits: int) -> float:
+        """
+        디지털 비트 수에 따른 블록 처리 시간 계산
+
+        처리 시간은 디지털 연산량에 비례 (비트²에 비례)
+        5-bit: 기본 시간
+        10-bit: 4배 시간 (10²/5² = 4)
+
+        Args:
+            digital_bits: 디지털 비트 수
+
+        Returns:
+            처리 시간 (ms)
+        """
+        # 처리 시간은 비트²에 비례 (연산량이 비트²에 비례하므로)
+        time_ratio = (digital_bits / 5.0) ** 2
+        return self.BASE_BLOCK_DURATION_MS * time_ratio
+
     def update_system_configuration(self) -> None:
         """순수 피드백 AGC: gain만 업데이트 (FSM 제거)"""
         try:
@@ -293,11 +311,13 @@ class AgcSystem:
                         print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
                     # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
 
-            # BER (STF 구간만)
+            # BER (STF 구간만) - 디지털 비트 수 반영
             ber_result = None
             ber_operations = {'multiplications': 0, 'additions': 0}
             if block_idx < packet_info["stf_end_idx"]:
-                ber_result = self.ber_calculator.process_stf_block(signal_block, noise_power)
+                ber_result = self.ber_calculator.process_stf_block(
+                    signal_block, noise_power, adc_bits=self.current_digital_bits
+                )
                 self.ber_history.append(ber_result["ber"])
                 ber_operations = self._calculate_ber_operations()
 
@@ -306,8 +326,11 @@ class AgcSystem:
             block_power_db = 10 * np.log10(block_power) if block_power > 0 else -np.inf
             self.power_history.append(block_power_db)
 
+            # 비트 수에 따른 동적 처리 시간 계산
+            block_processing_time = self.calculate_block_processing_time(self.current_digital_bits)
+
             self._update_power_measurements(
-                block_duration_ms=self.DEFAULT_BLOCK_DURATION_MS,
+                block_duration_ms=block_processing_time,
                 block_size=len(signal_block),
                 ber_result=ber_result,
                 cs_operations=cs_operations,
@@ -319,6 +342,8 @@ class AgcSystem:
                 "carrier_sensing": cs_result,
                 "gain_db": self.current_gain_db,
                 "adc_resolution": self.current_adc_resolution,
+                "digital_bits": self.current_digital_bits,  # 블록 처리에 사용된 디지털 비트
+                "processing_time_ms": block_processing_time,  # 블록 처리 시간
                 "ber": ber_result,
                 "signal_power_db": block_power_db,
                 "gain_changed": (step_db != 0.0),
@@ -327,6 +352,14 @@ class AgcSystem:
 
         # 패킷 결과
         final_ber_result = self.ber_calculator.process_complete_packet(packet_info, received_signal, noise_power)
+
+        # 총 처리 시간 계산 (Latency)
+        # 각 블록의 실제 처리 시간 합산 (블록마다 다른 디지털 비트 반영)
+        total_latency_ms = sum([
+            block["processing_time_ms"]
+            for block in processing_results
+        ])
+
         packet_result = {
             "packet_info": packet_info,
             "channel_snr_db": channel_snr_db,
@@ -335,6 +368,7 @@ class AgcSystem:
             "final_ber": final_ber_result,
             "block_results": processing_results,
             "processing_blocks": len(processing_results),
+            "total_latency_ms": total_latency_ms,  # 총 처리 시간 (비트 수 반영)
             "analog_power": {
                 "total_energy_mj": self.analog_power.get_total_energy(),
                 "average_power_mw": self.analog_power.get_average_power()

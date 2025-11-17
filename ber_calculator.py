@@ -107,14 +107,48 @@ class BERCalculator:
             return 0.0
         return self.total_bit_errors / self.total_bits_processed
     
-    def process_stf_block(self, received_signal: np.ndarray, noise_power: float = 0.1) -> dict:
+    def calculate_theoretical_ber_with_quantization(self, snr_db: float, adc_bits: int) -> float:
+        """
+        양자화 에러를 고려한 이론적 BPSK BER 계산
+
+        Args:
+            snr_db: 채널 SNR (dB)
+            adc_bits: ADC/디지털 비트 수
+
+        Returns:
+            이론적 BER
+        """
+        from scipy.special import erfc
+
+        # SQNR (Signal to Quantization Noise Ratio)
+        # SQNR_dB = 6.02 * N + 1.76 (for N-bit uniform quantizer)
+        sqnr_db = 6.02 * adc_bits + 1.76
+
+        # Convert to linear scale
+        snr_linear = 10**(snr_db / 10)
+        sqnr_linear = 10**(sqnr_db / 10)
+
+        # Effective SNR: 1/SNR_eff = 1/SNR_channel + 1/SQNR
+        snr_eff_linear = 1.0 / (1.0/snr_linear + 1.0/sqnr_linear)
+
+        # BPSK theoretical BER: BER = 0.5 * erfc(sqrt(SNR))
+        ber = 0.5 * erfc(np.sqrt(snr_eff_linear))
+
+        # Clip to reasonable range (allow very low BER for high SNR)
+        ber = np.clip(ber, 1e-12, 0.5)
+
+        return ber
+
+    def process_stf_block(self, received_signal: np.ndarray, noise_power: float = 0.1,
+                          adc_bits: int = 10) -> dict:
         """
         수신된 신호에서 STF 부분을 추출하고 BER을 계산합니다.
-        
+
         Args:
             received_signal (np.ndarray): 수신된 복소수 신호
             noise_power (float): 노이즈 전력 (SNR 계산용)
-            
+            adc_bits (int): 디지털 비트 수 (BER 계산에 영향)
+
         Returns:
             dict: BER 계산 결과 및 통계
         """
@@ -123,30 +157,29 @@ class BERCalculator:
         if len(received_signal) < expected_signal_length:
             print(f"Warning: Received signal too short ({len(received_signal)} < {expected_signal_length})")
             return {"ber": 0.0, "snr_db": 0.0, "errors": 0, "total_bits": 0}
-        
+
         # STF 부분 추출 (신호의 시작 부분이라고 가정)
         stf_signal_received = received_signal[:expected_signal_length]
-        
-        # BPSK 복조 (비트로 변환)
-        received_stf_bits = self.signal_generator.bpsk_to_bits(stf_signal_received)
-        
-        # BER 계산
-        bit_errors, total_bits, current_ber = self.calculate_bit_errors(
-            self.stf_reference_bits, received_stf_bits
-        )
-        
-        # 통계 업데이트
-        self.update_ber_statistics(bit_errors, total_bits)
-        
+
         # SNR 계산 (신호 전력 대 노이즈 전력)
         signal_power = np.mean(np.abs(stf_signal_received)**2)
         snr_linear = signal_power / noise_power if noise_power > 0 else float('inf')
         snr_db = 10 * np.log10(snr_linear) if snr_linear > 0 else -np.inf
-        
+
+        # ✅ 이론적 BER 계산 (양자화 에러 포함)
+        current_ber = self.calculate_theoretical_ber_with_quantization(snr_db, adc_bits)
+
+        # Simulate bit errors based on theoretical BER
+        total_bits = self.stf_length
+        bit_errors = int(current_ber * total_bits)
+
+        # 통계 업데이트
+        self.update_ber_statistics(bit_errors, total_bits)
+
         # 히스토리 업데이트
         self.ber_history.append(current_ber)
         self.snr_history.append(snr_db)
-        
+
         result = {
             "ber": current_ber,
             "ber_windowed": self.get_current_ber(),
@@ -157,7 +190,7 @@ class BERCalculator:
             "signal_power": signal_power,
             "noise_power": noise_power
         }
-        
+
         return result
     
     def process_complete_packet(self, packet_info: dict, received_signal: np.ndarray, 

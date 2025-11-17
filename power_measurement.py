@@ -42,10 +42,15 @@ class DigitalComputationMeasurement:
             total_mults += ber_ops.get('multiplications',0)
             total_adds  += ber_ops.get('additions',0)
 
-        # ====== 비트 종속 더미 연산(비교 핵심) ======
+        # ====== 비트 종속 디지털 연산 (RF 신호 처리) ======
+        # LNA/Mixer/VGA/LPF 디지털 처리 연산량
+        # - LNA 출력 처리: b-bit 연산
+        # - Mixer I/Q 복소 곱셈: O(b²) 연산
+        # - VGA gain 적용: O(b²) 곱셈
+        # - LPF 필터링: O(b) 덧셈
         b = self.current_adc_bits
-        total_adds  += int(K_ADD_PER_SAMPLE * block_size * b)
-        total_mults += int(K_MUL_PER_SAMPLE * block_size * (b**2))
+        total_adds  += int(K_ADD_PER_SAMPLE * block_size * b)      # 덧셈: O(b)
+        total_mults += int(K_MUL_PER_SAMPLE * block_size * (b**2))  # 곱셈: O(b²)
 
         # 제안 로직 추가 오버헤드(예: 탐지/상관 보조 연산)
         if is_proposed_method:

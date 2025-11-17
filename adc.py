@@ -90,6 +90,10 @@ class BaseADC:
 
         예: 10비트 신호 (0~1023) → 5비트 (0~31)로 상위 비트만 사용
 
+        ⚠️ 중요: truncation 시 실제 양자화 에러 반영
+        - 5-bit: 32 levels → 큰 양자화 에러 → 높은 BER
+        - 10-bit: 1024 levels → 작은 양자화 에러 → 낮은 BER
+
         Args:
             x: 입력 신호 (이미 양자화된, real 또는 complex)
             target_bits: 목표 비트 수
@@ -110,17 +114,16 @@ class BaseADC:
             return (i_truncated + 1j * q_truncated).astype(np.complex64)
 
         # Real 신호 처리
-        # 정수 레벨로 변환
+        # target_bits에 해당하는 양자화 스텝 계산 (현실적 양자화)
+        target_levels = 2**target_bits
+        target_step = (2 * self.vref) / target_levels
+
+        # 입력을 target_bits 해상도로 직접 양자화
         x_clipped = np.clip(x, -self.vref, self.vref)
-        x_int = np.round(x_clipped / self.step).astype(np.int32)  # int로 명시적 변환
+        x_truncated = np.round(x_clipped / target_step) * target_step
 
-        # 비트 시프트로 상위 비트만 추출
-        bit_shift = self.n_bits - target_bits
-        x_truncated_int = x_int >> bit_shift  # 하위 비트 버림
-
-        # 다시 원래 스케일로 복원 (하지만 레벨은 적음)
-        x_truncated_int = x_truncated_int << bit_shift
-        x_truncated = x_truncated_int * self.step
+        # vref 범위로 다시 클리핑 (오버플로우 방지)
+        x_truncated = np.clip(x_truncated, -self.vref, self.vref)
 
         return x_truncated.astype(np.float32)
 
