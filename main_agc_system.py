@@ -326,11 +326,17 @@ class AgcSystem:
             block_power_db = 10 * np.log10(block_power) if block_power > 0 else -np.inf
             self.power_history.append(block_power_db)
 
-            # 비트 수에 따른 동적 처리 시간 계산
+            # 비트 수에 따른 동적 처리 시간 계산 (Latency용)
             block_processing_time = self.calculate_block_processing_time(self.current_digital_bits)
 
+            # 아날로그는 실제 신호 시간에만 비례 (모든 모델 동일)
+            # 패킷의 실제 물리적 시간 = 샘플 수 / 샘플링 레이트
+            from config import SAMPLING_RATE
+            analog_block_time_ms = (len(signal_block) / SAMPLING_RATE) * 1000  # ms
+
             self._update_power_measurements(
-                block_duration_ms=block_processing_time,
+                analog_duration_ms=analog_block_time_ms,  # 아날로그: 고정 시간
+                digital_duration_ms=block_processing_time,  # 디지털: 비트 종속
                 block_size=len(signal_block),
                 ber_result=ber_result,
                 cs_operations=cs_operations,
@@ -422,7 +428,8 @@ class AgcSystem:
         return {'multiplications': mults, 'additions': adds}
 
     def _update_power_measurements(self,
-                                   block_duration_ms: float,
+                                   analog_duration_ms: float,  # 아날로그: 실제 신호 시간
+                                   digital_duration_ms: float,  # 디지털: 처리 시간
                                    block_size: int,
                                    ber_result: Optional[Dict],
                                    cs_operations: Optional[Dict] = None,
@@ -430,15 +437,14 @@ class AgcSystem:
         """
         전력 측정 업데이트 (교수님 피드백 반영, FSM 제거)
 
-        - 아날로그: 항상 동일 (UnifiedRFPath 사용)
-        - 디지털: current_digital_bits에 따라 연산량 변경
+        - 아날로그: 항상 동일 전력, 실제 신호 시간에만 비례
+        - 디지털: current_digital_bits에 따라 연산량 변경, 처리 시간은 latency에만 반영
         """
-        # 아날로그는 항상 동일 (통일된 RF path)
-        # is_low_power 플래그는 여전히 유지 (호환성)
+        # 아날로그는 실제 신호 수신 시간에만 비례 (모든 모델 동일)
         is_low_power = False  # 아날로그는 항상 high-perf 모드 (통일됨)
         state_name = "RUNNING"  # FSM 제거: 단순 상태 문자열
 
-        self.analog_power.update_power_measurement(state_name, block_duration_ms, is_low_power)
+        self.analog_power.update_power_measurement(state_name, analog_duration_ms, is_low_power)
 
         # 디지털 연산량은 current_digital_bits에 비례
         self.digital_computation.update_computation(
@@ -461,7 +467,7 @@ class AgcSystem:
             ber=ber_result['ber'] if ber_result else 0,
             fsm_state=state_name,
             gain=self.current_gain_db,
-            duration_ms=block_duration_ms
+            duration_ms=analog_duration_ms  # 아날로그 신호 시간 사용
         )
 
     def run_simulation(self,
