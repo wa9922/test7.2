@@ -80,8 +80,9 @@ NOISE_POWER    = 0.1
 # --- 디지털 더미 연산(비트 기반) 스케일 상수 ---
 # adds_per_sample ≈ K_ADD * bits
 # mults_per_sample ≈ K_MUL * bits^2
-K_ADD_PER_SAMPLE  = 1.0
-K_MUL_PER_SAMPLE  = 0.05
+# 값을 크게 증가시켜 디지털 에너지 차이를 명확하게 표현
+K_ADD_PER_SAMPLE  = 5000.0  # 1.0 → 5000.0 (5000배 증가)
+K_MUL_PER_SAMPLE  = 250.0   # 0.05 → 250.0 (5000배 증가)
 
 # --- 옵션 ---
 DEBUG_MODE = False
