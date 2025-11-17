@@ -120,11 +120,12 @@ class AgcSystem:
         """
         gain_db = self.current_gain_db
 
-        # LNA gain은 고정, VGA gain으로 전체 gain 조절
-        lna_gain = 20
+        # LNA gain은 고정 20dB, VGA gain으로 전체 gain 조절
+        # Total gain = LNA(20dB) + VGA(가변)
         vga_gain = max(0, gain_db - 20)  # VGA는 음수 불가
 
-        self.rf_path.set_gains(lna_gain=lna_gain, vga_gain=vga_gain)
+        # UnifiedRFPath는 set_vga_gain 메소드 사용
+        self.rf_path.set_vga_gain(vga_gain)
         amplified_signal = self.rf_path.run(signal)
 
         return amplified_signal

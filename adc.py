@@ -39,11 +39,18 @@ class BaseADC:
         신호를 양자화 (float 출력)
 
         Args:
-            x: 입력 신호
+            x: 입력 신호 (real 또는 complex)
 
         Returns:
-            양자화된 신호 (float32, GNURadio Float 타입 호환)
+            양자화된 신호 (float32 또는 complex64, GNURadio 호환)
         """
+        # Complex 신호 처리: I/Q 각각 양자화
+        if np.iscomplexobj(x):
+            i_quantized = self.quantize(x.real)
+            q_quantized = self.quantize(x.imag)
+            return (i_quantized + 1j * q_quantized).astype(np.complex64)
+
+        # Real 신호 처리
         # 입력을 vref 범위로 클리핑
         x_clipped = np.clip(x, -self.vref, self.vref)
 
@@ -84,19 +91,28 @@ class BaseADC:
         예: 10비트 신호 (0~1023) → 5비트 (0~31)로 상위 비트만 사용
 
         Args:
-            x: 입력 신호 (이미 양자화된)
+            x: 입력 신호 (이미 양자화된, real 또는 complex)
             target_bits: 목표 비트 수
 
         Returns:
-            truncated 신호 (float32, 더 적은 레벨만 사용)
+            truncated 신호 (float32 또는 complex64, 더 적은 레벨만 사용)
         """
         if target_bits >= self.n_bits:
             # truncation 불필요
+            if np.iscomplexobj(x):
+                return x.astype(np.complex64)
             return x.astype(np.float32)
 
+        # Complex 신호 처리: I/Q 각각 truncate
+        if np.iscomplexobj(x):
+            i_truncated = self.truncate_to_bits(x.real, target_bits)
+            q_truncated = self.truncate_to_bits(x.imag, target_bits)
+            return (i_truncated + 1j * q_truncated).astype(np.complex64)
+
+        # Real 신호 처리
         # 정수 레벨로 변환
         x_clipped = np.clip(x, -self.vref, self.vref)
-        x_int = np.round(x_clipped / self.step)
+        x_int = np.round(x_clipped / self.step).astype(np.int32)  # int로 명시적 변환
 
         # 비트 시프트로 상위 비트만 추출
         bit_shift = self.n_bits - target_bits
