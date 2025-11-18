@@ -123,8 +123,9 @@ AgcSystem (main orchestrator)
 - Gain history tracking and statistics collection
 
 **Fixed Models**:
-- `FixedLowPowerAGC`: 항상 15dB gain / 5-bit digital / gain feedback 비활성화
-- `FixedHighPerformanceAGC`: 항상 40dB gain / 10-bit digital / gain feedback 비활성화
+- `FixedLowPowerAGC`: 5-bit digital 고정 / gain은 AGC로 자동 조절
+- `FixedHighPerformanceAGC`: 10-bit digital 고정 / gain은 AGC로 자동 조절
+- **차이점**: 디지털 비트 적응 여부 (Fixed는 비트 고정, Adaptive는 비트 적응)
 
 **Entry Point**: `main()` at end of file - runs 3 models and generates 11 comparison metrics graphs
 
@@ -355,13 +356,15 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 **Role**: Compare three AGC models and generate result metrics
 
 **Key Classes**:
-- `FixedLowPowerAGC`: Extends AgcSystem, 15dB gain + 5-bit digital 고정
-  - Overrides `process_packet()` to prevent gain/digital changes
-  - Lowest power consumption, potential accuracy loss
+- `FixedLowPowerAGC`: Extends AgcSystem, 5-bit digital 고정 + AGC 활성화
+  - Overrides `process_packet()` to prevent digital bit changes only
+  - Gain은 AGC로 자동 조절 (saturation 방지, SNR 최적화)
+  - Lowest digital power consumption, potential accuracy loss
 
-- `FixedHighPerformanceAGC`: Extends AgcSystem, 40dB gain + 10-bit digital 고정
-  - Overrides `process_packet()` to prevent gain/digital changes
-  - Highest accuracy, highest power consumption
+- `FixedHighPerformanceAGC`: Extends AgcSystem, 10-bit digital 고정 + AGC 활성화
+  - Overrides `process_packet()` to prevent digital bit changes only
+  - Gain은 AGC로 자동 조절 (saturation 방지, SNR 최적화)
+  - Highest accuracy, highest digital power consumption
 
 - `AdaptiveAGC`: Extends AgcSystem, uses full adaptive logic
   - Gain responds to peak-based feedback (10-50 dB continuous)
@@ -437,9 +440,9 @@ if __name__ == "__main__":
 
 **Execution Flow**:
 1. Create 3 AGC models:
-   - `FixedLowPowerAGC()` (15dB, 5-bit)
-   - `FixedHighPerformanceAGC()` (40dB, 10-bit)
-   - `AgcSystem(use_indicator_for_adc=True)` (Adaptive)
+   - `FixedLowPowerAGC()` (5-bit digital 고정, gain은 AGC)
+   - `FixedHighPerformanceAGC()` (10-bit digital 고정, gain은 AGC)
+   - `AgcSystem(use_indicator_for_adc=True)` (Adaptive, 5/10-bit 적응 + gain AGC)
 
 2. For each model, call `run_one_model()`:
    - Execute `model.run_simulation(traffic_types, snr_range, packets_per_scenario)`
@@ -918,28 +921,28 @@ elif peak < 0.25:
 self.current_gain_db = clip(self.current_gain_db, 10, 50)
 ```
 
-### 4. Fixed 모델 Gain 고정
+### 4. Fixed 모델 정책 재정의
 
-**Before**:
-- Fixed models called parent process_packet()
-- Gain feedback still active → gain changes
+**의미 변경**:
+- "Fixed" = 디지털 비트 고정 (5-bit or 10-bit)
+- Gain은 모든 모델에서 AGC로 자동 조절
 
-**After** (교수님 피드백 반영):
-- Added `enable_gain_feedback` flag
-- Fixed models: `enable_gain_feedback=False`
-- Gain stays constant
+**이유**:
+- AGC (Automatic Gain Control) 없이는 실제 시스템 동작 불가
+- Saturation 방지와 SNR 최적화는 필수
+- 비교 포인트: **디지털 비트 적응 여부**
 
 ```python
 # main_agc_system.py
 class FixedLowPowerAGC(AgcSystem):
     def __init__(self):
-        super().__init__(enable_gain_feedback=False)  # Gain 고정
-        self.current_gain_db = 15.0
+        super().__init__(enable_gain_feedback=True)  # ✅ AGC 활성화
+        self.current_digital_bits = 5  # 디지털 비트만 고정
 
 class FixedHighPerformanceAGC(AgcSystem):
     def __init__(self):
-        super().__init__(enable_gain_feedback=False)  # Gain 고정
-        self.current_gain_db = 40.0
+        super().__init__(enable_gain_feedback=True)  # ✅ AGC 활성화
+        self.current_digital_bits = 10  # 디지털 비트만 고정
 ```
 
 ### 5. 트래픽 타입 간소화
@@ -1064,13 +1067,15 @@ if __name__ == "__main__":
 ```python
 from main_agc_system import FixedLowPowerAGC, FixedHighPerformanceAGC
 
-# Low-Power Fixed: 15dB gain, 5-bit digital
+# Low-Power Fixed: 5-bit digital (고정), gain AGC (자동 조절)
 low_power = FixedLowPowerAGC()
 result_lp = low_power.process_packet(packet, channel_snr_db=10)
 
-# High-Performance Fixed: 40dB gain, 10-bit digital
+# High-Performance Fixed: 10-bit digital (고정), gain AGC (자동 조절)
 high_perf = FixedHighPerformanceAGC()
 result_hp = high_perf.process_packet(packet, channel_snr_db=10)
+
+# 차이점: 디지털 비트만 고정, gain은 모두 AGC로 자동 조절
 ```
 
 ---
