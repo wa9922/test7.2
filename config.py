@@ -16,11 +16,12 @@ PAYLOAD_BITS      = 1024
 # GNURadio 호환: Complex는 float32 실수부 + float32 허수부 = 64비트
 BPSK_CONSTELLATION = {0: np.complex64(-1.0+0j), 1: np.complex64(+1.0+0j)}
 
-# --- Gain 레벨 (FSM 제거됨, 참고용 설정) ---
-# Fixed 모델에서 사용하는 고정 gain 값
+# --- Gain 레벨 (FSM 제거됨, 참고용 설정만 남음) ---
+# 참고: 실제로는 모든 모델이 AGC를 사용하여 gain을 자동 조절합니다.
+# Fixed 모델은 디지털 비트만 고정, gain은 동적으로 변경됩니다.
 GAIN_LEVELS = {
-    "LOW_GAIN": 15,   # dB (저전력 모델용)
-    "HIGH_GAIN": 40,  # dB (고성능 모델용)
+    "LOW_GAIN": 15,   # dB (참고용, 더 이상 고정값으로 사용 안 함)
+    "HIGH_GAIN": 40,  # dB (참고용, 더 이상 고정값으로 사용 안 함)
 }
 
 # (기존) 트래픽별 ADC 해상도 정의는 더 이상 실제 ADC 비트 선택에 쓰지 않음.
