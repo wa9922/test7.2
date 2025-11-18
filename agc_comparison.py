@@ -110,42 +110,39 @@ def calculate_average_results(accumulated_results: Dict, traffic_types: List[str
 
 class FixedLowPowerAGC(AgcSystem):
     """
-    저전력 고정 AGC - 항상 최소 전력 모드 (교수님 피드백 반영)
+    저전력 고정 AGC - 디지털 비트는 5-bit 고정, gain은 자동 조절
 
+    특징:
     - 아날로그: UnifiedRFPath (항상 동일)
-    - 디지털: 항상 5비트 truncation 사용
+    - 디지털: 항상 5비트 truncation 사용 (고정)
+    - Gain: AGC 피드백 활성화 (자동 조절)
     """
 
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
         # initial_digital_bits=5: 항상 5비트 사용
-        # enable_gain_feedback=False: gain 피드백 비활성화 (고정 모델)
-        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=False)
+        # enable_gain_feedback=True: AGC 활성화 (gain 자동 조절)
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=True)
         self.mode_name = "Low-Power Fixed AGC (5-bit)"
-        # FSM 제거: 직접 gain 설정
-        self.current_gain_db = 15.0  # 15 dB 고정
-        self.current_gain_linear = 10**(15/20)
+        self.current_digital_bits = 5  # 고정 5-bit
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        """패킷 처리 - 항상 저전력 모드 유지 (5비트 디지털 truncation)"""
-        # Gain과 디지털 비트 고정
-        self.current_gain_db = 15.0  # 15 dB 고정
-        self.current_gain_linear = 10**(15/20)
+        """패킷 처리 - 디지털 비트만 고정 (5비트), gain은 AGC로 자동 조절"""
+        # 디지털 비트만 고정 (gain은 자동 조절됨)
         self.current_digital_bits = 5
 
-        # 디지털 비트 변경 막기
+        # 디지털 비트 변경 막기 (항상 5비트 유지)
         original_update_adc = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda traffic_type: None
 
         try:
-            # 부모 클래스의 처리 메서드 호출
+            # 부모 클래스의 처리 메서드 호출 (AGC 피드백 활성화됨)
             result = super().process_packet(packet_info, channel_snr_db)
         finally:
             # 원래 메서드 복구
             self.update_adc_resolution_for_traffic = original_update_adc
 
-            # 고정 세팅 유지
-            self.current_gain_db = 15.0
+            # 디지털 비트 고정 유지
             self.current_digital_bits = 5
 
         return result
@@ -153,42 +150,39 @@ class FixedLowPowerAGC(AgcSystem):
 
 class FixedHighPerformanceAGC(AgcSystem):
     """
-    고성능 고정 AGC - 항상 최고 성능 모드 (교수님 피드백 반영)
+    고성능 고정 AGC - 디지털 비트는 10-bit 고정, gain은 자동 조절
 
+    특징:
     - 아날로그: UnifiedRFPath (항상 동일)
-    - 디지털: 항상 10비트 전부 사용
+    - 디지털: 항상 10비트 전부 사용 (고정)
+    - Gain: AGC 피드백 활성화 (자동 조절)
     """
 
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
         # initial_digital_bits=10: 항상 10비트 사용
-        # enable_gain_feedback=False: gain 피드백 비활성화 (고정 모델)
-        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=False)
+        # enable_gain_feedback=True: AGC 활성화 (gain 자동 조절)
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=True)
         self.mode_name = "High-Performance Fixed AGC (10-bit)"
-        # FSM 제거: 직접 gain 설정
-        self.current_gain_db = 40.0  # 40 dB 고정
-        self.current_gain_linear = 10**(40/20)
+        self.current_digital_bits = 10  # 고정 10-bit
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        """패킷 처리 - 항상 고성능 모드 유지 (10비트 디지털 전부 사용)"""
-        # Gain과 디지털 비트 고정
-        self.current_gain_db = 40.0  # 40 dB 고정
-        self.current_gain_linear = 10**(40/20)
+        """패킷 처리 - 디지털 비트만 고정 (10비트), gain은 AGC로 자동 조절"""
+        # 디지털 비트만 고정 (gain은 자동 조절됨)
         self.current_digital_bits = 10
 
-        # 디지털 비트 변경 막기
+        # 디지털 비트 변경 막기 (항상 10비트 유지)
         original_update_adc = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda traffic_type: None
 
         try:
-            # 부모 클래스의 처리 메서드 호출
+            # 부모 클래스의 처리 메서드 호출 (AGC 피드백 활성화됨)
             result = super().process_packet(packet_info, channel_snr_db)
         finally:
             # 원래 메서드 복구
             self.update_adc_resolution_for_traffic = original_update_adc
 
-            # 고정 세팅 유지
-            self.current_gain_db = 40.0
+            # 디지털 비트 고정 유지
             self.current_digital_bits = 10
 
         return result
