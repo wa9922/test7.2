@@ -78,6 +78,16 @@ BER_UPDATE_INTERVAL = 100
 DEFAULT_SNR_DB = 10
 NOISE_POWER    = 0.1
 
+# --- 트래픽별 SNR 범위 (실제 무선 환경 반영) ---
+# 각 트래픽 타입은 서로 다른 채널 품질(SNR)에서 동작
+# - 저전력 신호: 낮은 SNR (센서, 텔레메트리 등)
+# - 고성능 신호: 높은 SNR (비디오, 음성 등)
+TRAFFIC_SNR_RANGE = {
+    "wake_up": [-5, 0, 5],                    # 매우 낮은 품질 (wake-up 신호)
+    "lowpowersignal": [0, 5, 10],             # 낮은~중간 품질 (센서 데이터)
+    "highperformancesignal": [15, 20, 25],    # 높은 품질 (비디오/음성)
+}
+
 # --- 디지털 더미 연산(비트 기반) 스케일 상수 ---
 # adds_per_sample ≈ K_ADD * bits
 # mults_per_sample ≈ K_MUL * bits^2

@@ -475,16 +475,30 @@ class AgcSystem:
 
     def run_simulation(self,
                        traffic_types: List[str] = ["lowpowersignal", "highperformancesignal"],
-                       snr_range_db: List[float] = [5, 10, 15, 20],
+                       snr_range_db: List[float] = None,  # Deprecated, uses TRAFFIC_SNR_RANGE
                        packets_per_scenario: int = 20) -> Dict:
+        """
+        AGC 시스템 시뮬레이션 실행
+
+        Args:
+            traffic_types: 시뮬레이션할 트래픽 타입 리스트
+            snr_range_db: (Deprecated) 트래픽별 SNR은 config.TRAFFIC_SNR_RANGE에서 자동 설정
+            packets_per_scenario: 각 (traffic, SNR) 시나리오당 패킷 수
+        """
+        from config import TRAFFIC_SNR_RANGE
+
         print("=" * 80)
         print("Starting AGC System Comprehensive Simulation")
-        print(f"Traffic Pattern: wake_up -> {' -> '.join(traffic_types)} -> gap -> repeat")
-        print(f"SNR Values: {snr_range_db} dB")
+        print(f"Traffic Types: {', '.join(traffic_types)}")
         print(f"Packets per scenario: {packets_per_scenario}")
         print("=" * 80)
 
-        traffic_manager = TrafficFlowManager(traffic_types, gap_size=2)
+        # 트래픽별 SNR 범위 출력
+        print("\nTraffic-specific SNR ranges:")
+        for traffic in traffic_types:
+            snr_range = TRAFFIC_SNR_RANGE.get(traffic, [10])
+            print(f"  {traffic}: {snr_range} dB")
+        print("=" * 80)
 
         simulation_results = {
             "scenarios": [],
@@ -494,39 +508,39 @@ class AgcSystem:
 
         packet_counter = 0
 
-        for snr_db in snr_range_db:
-            scenario_results = []
+        # 트래픽별로 순회 (각 traffic은 고유한 SNR 범위 사용)
+        for traffic_type in traffic_types:
+            # 트래픽별 SNR 범위 가져오기
+            snr_range = TRAFFIC_SNR_RANGE.get(traffic_type, [10])
 
-            for _ in range(packets_per_scenario):
-                traffic_type = traffic_manager.get_traffic_type(packet_counter)
-                if traffic_type is None:
+            for snr_db in snr_range:
+                scenario_results = []
+
+                for _ in range(packets_per_scenario):
+                    current_time = self.time_series_collector.get_current_time()
+                    print(f"\n--- Time: {current_time:.1f}ms | Packet {packet_counter + 1}: "
+                          f"{traffic_type.upper()} traffic at {snr_db} dB SNR ---")
+
+                    packet_info = self.signal_generator.create_complete_packet(traffic_type)
+                    result = self.process_packet(packet_info, snr_db)
+                    scenario_results.append(result)
+
                     packet_counter += 1
-                    continue
+                    print(f"  Packet processed")
+                    print(f"    Current Analog Power: {self.analog_power.get_average_power():.2f} mW")
+                    print(f"    Digital Energy so far: {self.digital_computation.get_total_energy():.2f} pJ")
 
-                current_time = self.time_series_collector.get_current_time()
-                print(f"\n--- Time: {current_time:.1f}ms | Packet {packet_counter + 1}: "
-                      f"{traffic_type.upper()} traffic at {snr_db} dB SNR ---")
-
-                packet_info = self.signal_generator.create_complete_packet(traffic_type)
-                result = self.process_packet(packet_info, snr_db)
-                scenario_results.append(result)
-
-                packet_counter += 1
-                print(f"  Packet processed")
-                print(f"    Current Analog Power: {self.analog_power.get_average_power():.2f} mW")
-                print(f"    Digital Energy so far: {self.digital_computation.get_total_energy():.2f} pJ")
-
-            if scenario_results:
-                scenario_summary = self._calculate_scenario_statistics(scenario_results, snr_db)
-                simulation_results["scenarios"].append(scenario_summary)
-                self._print_scenario_summary(scenario_summary, snr_db)
+                if scenario_results:
+                    scenario_summary = self._calculate_scenario_statistics(scenario_results, snr_db, traffic_type)
+                    simulation_results["scenarios"].append(scenario_summary)
+                    self._print_scenario_summary(scenario_summary, snr_db, traffic_type)
 
         simulation_results["overall_statistics"] = self._calculate_overall_statistics(simulation_results["scenarios"])
         simulation_results["time_series_data"] = self.time_series_collector.get_data()
         self._print_simulation_summary(simulation_results)
         return simulation_results
 
-    def _calculate_scenario_statistics(self, scenario_results: List[Dict], snr_db: float) -> Dict:
+    def _calculate_scenario_statistics(self, scenario_results: List[Dict], snr_db: float, traffic_type: str = "unknown") -> Dict:
         scenario_bers = [r["final_ber"]["ber"] for r in scenario_results]
         scenario_gains = [r["final_gain_db"] for r in scenario_results]
         scenario_snrs = [r["final_ber"]["snr_db"] for r in scenario_results]
@@ -545,6 +559,7 @@ class AgcSystem:
         scenario_digital = [r["digital_computation"] for r in scenario_results if "digital_computation" in r]
 
         return {
+            "traffic_type": traffic_type,
             "snr_db": snr_db,
             "packet_count": len(scenario_results),
             "average_ber": mean_ber,
@@ -579,8 +594,8 @@ class AgcSystem:
             "overall_average_gain": np.mean(all_gains) if all_gains else 0,
         }
 
-    def _print_scenario_summary(self, scenario_summary: Dict, snr_db: float) -> None:
-        print(f"\n  SNR {snr_db} dB Scenario completed:")
+    def _print_scenario_summary(self, scenario_summary: Dict, snr_db: float, traffic_type: str = "unknown") -> None:
+        print(f"\n  [{traffic_type.upper()}] SNR {snr_db} dB Scenario completed:")
         print(f"    Packets processed: {scenario_summary['packet_count']}")
         print(f"    BER: {scenario_summary['average_ber']:.6f} ± {scenario_summary['std_ber']:.6f}")
         print(f"    Gain: {scenario_summary['average_gain']:.1f} ± {scenario_summary['std_gain']:.1f} dB")
@@ -1064,7 +1079,6 @@ def run_one_model(model_name: str, model_obj: AgcSystem) -> Dict[str, float]:
     print("="*100)
     sim = model_obj.run_simulation(
         traffic_types=["lowpowersignal", "highperformancesignal"],
-        snr_range_db=[5, 10, 15, 20],
         packets_per_scenario=20
     )
     return compute_model_metrics(sim)
