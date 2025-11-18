@@ -67,7 +67,8 @@ class AgcSystem:
         self.enable_gain_feedback = enable_gain_feedback  # Gain feedback 제어
 
         # 순수 피드백 기반 AGC: FSM 제거, 직접 gain 변수 사용
-        self.current_gain_db: float = 30.0  # 초기 gain: 30 dB (중간값)
+        # Multi-Stage AGC에서는 RF path의 총 gain을 추적
+        self.current_gain_db: float = 35.0  # 초기 gain: LNA 15dB + VGA 20dB = 35 dB
 
         self.signal_generator = SignalGenerator()
         self.ber_calculator = BERCalculator()
@@ -78,7 +79,8 @@ class AgcSystem:
         self.current_adc_resolution = 10  # ADC 하드웨어는 항상 10비트
 
         # RF 경로도 하나만 사용 (항상 동일한 아날로그 회로)
-        self.rf_path = UnifiedRFPath(lna_gain=20, vga_gain=20, lpf_alpha=0.2)
+        # Multi-Stage AGC: LNA discrete + VGA continuous
+        self.rf_path = UnifiedRFPath(lpf_alpha=0.2)
 
         # 디지털 파트: truncation 비트 수만 변경 (5비트 또는 10비트)
         self.current_digital_bits = initial_digital_bits  # 디지털 처리에 사용할 비트 수
@@ -117,16 +119,17 @@ class AgcSystem:
 
         실제 AGC 동작: RF 증폭과 ADC 양자화를 분리하여
         블록 단위로 gain 피드백을 적용할 수 있도록 함
+
+        Multi-Stage AGC:
+        - LNA: discrete gain (0, 15, 30 dB)
+        - VGA: continuous gain (0-40 dB)
+        - RF path가 자체적으로 gain 관리
         """
-        gain_db = self.current_gain_db
-
-        # LNA gain은 고정 20dB, VGA gain으로 전체 gain 조절
-        # Total gain = LNA(20dB) + VGA(가변)
-        vga_gain = max(0, gain_db - 20)  # VGA는 음수 불가
-
-        # UnifiedRFPath는 set_vga_gain 메소드 사용
-        self.rf_path.set_vga_gain(vga_gain)
+        # RF path는 현재 LNA, VGA gain으로 신호 증폭
         amplified_signal = self.rf_path.run(signal)
+
+        # 현재 총 gain 추적 (LNA + VGA)
+        self.current_gain_db = self.rf_path.get_total_gain()
 
         return amplified_signal
 
@@ -289,27 +292,27 @@ class AgcSystem:
                     received_signal[block_idx:block_end] = quantized_block
                     signal_block = quantized_block
 
-            # 6. Gain 피드백 (실제 AGC의 핵심! FSM 제거)
+            # 6. Gain 피드백 (Multi-Stage AGC: LNA + VGA 계층적 조절)
             # Fixed 모델은 gain feedback 비활성화
-            step_db = 0.0  # 초기화 (gain_changed 플래그용)
+            gain_info = None
             if self.enable_gain_feedback:
                 # 현재 블록의 peak를 측정하여 다음 블록에 적용할 gain 조절
                 peak_blk = float(np.max(np.abs(signal_block))) if len(signal_block) > 0 else 0.0
-                if peak_blk > HIGH_THR + EPS:
-                    # 신호가 너무 크면 gain 감소 (saturation 방지)
-                    step_db = -STEP_DB
-                elif peak_blk < LOW_THR - EPS:
-                    # 신호가 너무 작으면 gain 증가 (SNR 향상)
-                    step_db = +STEP_DB
 
-                if step_db != 0.0:
-                    # Gain 업데이트 (다음 블록에 적용됨!)
-                    old_gain = self.current_gain_db
-                    self.current_gain_db = np.clip(self.current_gain_db + step_db, 10, 50)  # Gain 범위 제한
-                    self.update_system_configuration()
-                    if DEBUG_MODE:
-                        print(f"  [AGC Feedback] Peak={peak_blk:.3f}, Gain: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
-                    # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
+                # Multi-Stage AGC: RF path가 LNA/VGA를 계층적으로 조절
+                gain_info = self.rf_path.update_gain_hierarchical(peak_blk)
+
+                # 총 gain 업데이트
+                self.current_gain_db = gain_info['total_gain_db']
+
+                if DEBUG_MODE and (gain_info['lna_changed'] or gain_info['vga_changed']):
+                    print(f"  [Multi-Stage AGC] Peak={peak_blk:.3f}")
+                    if gain_info['lna_changed']:
+                        print(f"    LNA: {gain_info['old_lna_db']:.0f} → {gain_info['new_lna_db']:.0f} dB (discrete)")
+                    if gain_info['vga_changed']:
+                        print(f"    VGA: {gain_info['old_vga_db']:.1f} → {gain_info['new_vga_db']:.1f} dB (continuous)")
+                    print(f"    Total Gain: {gain_info['total_gain_db']:.1f} dB")
+                # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
 
             # BER (STF 구간만) - 디지털 비트 수 반영
             ber_result = None
@@ -352,7 +355,7 @@ class AgcSystem:
                 "processing_time_ms": block_processing_time,  # 블록 처리 시간
                 "ber": ber_result,
                 "signal_power_db": block_power_db,
-                "gain_changed": (step_db != 0.0),
+                "gain_changed": (gain_info is not None and (gain_info['lna_changed'] or gain_info['vga_changed'])) if self.enable_gain_feedback else False,
                 "time_ms": self.time_series_collector.get_current_time()
             })
 
@@ -616,10 +619,21 @@ class FixedLowPowerAGC(AgcSystem):
         self.current_digital_bits = 5  # 고정 5-bit
         self.current_gain_linear = 10**(15/20)
 
+        # Multi-Stage AGC: LNA와 VGA를 고정값으로 설정
+        # 총 15dB = LNA 15dB + VGA 0dB
+        self.rf_path.current_lna_index = 1  # 15dB
+        self.rf_path.vga_gain_db = 0.0
+        print(f"Fixed Low-Power AGC: LNA={self.rf_path.get_lna_gain()}dB, VGA={self.rf_path.get_vga_gain()}dB, Total={self.rf_path.get_total_gain()}dB")
+
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
         # 고정 세팅: gain과 digital bits 고정
         self.current_gain_db = 15.0
         self.current_digital_bits = 5
+
+        # Multi-Stage AGC 고정
+        self.rf_path.current_lna_index = 1  # 15dB
+        self.rf_path.vga_gain_db = 0.0
+
         # 적응 차단
         original_update = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda *a, **k: None
@@ -638,10 +652,21 @@ class FixedHighPerformanceAGC(AgcSystem):
         self.current_digital_bits = 10  # 고정 10-bit
         self.current_gain_linear = 10**(40/20)
 
+        # Multi-Stage AGC: LNA와 VGA를 고정값으로 설정
+        # 총 40dB = LNA 30dB + VGA 10dB
+        self.rf_path.current_lna_index = 2  # 30dB
+        self.rf_path.vga_gain_db = 10.0
+        print(f"Fixed High-Performance AGC: LNA={self.rf_path.get_lna_gain()}dB, VGA={self.rf_path.get_vga_gain()}dB, Total={self.rf_path.get_total_gain()}dB")
+
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
         # 고정 세팅: gain과 digital bits 고정
         self.current_gain_db = 40.0
         self.current_digital_bits = 10
+
+        # Multi-Stage AGC 고정
+        self.rf_path.current_lna_index = 2  # 30dB
+        self.rf_path.vga_gain_db = 10.0
+
         # 적응 차단
         original_update = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda *a, **k: None

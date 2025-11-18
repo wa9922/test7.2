@@ -182,31 +182,47 @@ class LowPowerPath:
 
 class UnifiedRFPath:
     """
-    통일된 RF 프론트엔드 경로 (교수님 피드백 반영)
+    통일된 RF 프론트엔드 경로 (Multi-Stage AGC)
 
-    아날로그 부분은 항상 동일하게 동작:
-    - 항상 같은 LNA, VGA, LPF 사용
+    실제 AGC 시스템과 동일한 계층적 gain control:
+    - LNA: Discrete gain levels (coarse adjustment)
+    - VGA: Continuous gain (fine adjustment)
     - 전력 소비 항상 동일
-    - Gain만 피드백으로 조절
 
     구조: [LNA] → [Mixer] → [VGA] → [LPF]
-           ↑                ↑
-           └────────────────┴─── Gain Control Feedback
+           ↑ discrete      ↑ continuous
+           └───────────────┴─── Hierarchical Gain Control Feedback
+
+    동작 방식:
+    1. VGA 먼저 조절 (fine tuning, 빠른 응답)
+    2. VGA 범위 초과 시 LNA 조절 (coarse tuning, 느린 응답)
     """
 
-    def __init__(self, lna_gain: float = 20, vga_gain: float = 20, lpf_alpha: float = 0.2):
+    def __init__(self, lpf_alpha: float = 0.2):
         """
         통일된 RF 경로 초기화
 
         Args:
-            lna_gain: LNA 고정 이득 (dB)
-            vga_gain: VGA 초기 이득 (dB)
             lpf_alpha: LPF 필터 계수
         """
-        self.lna_gain = lna_gain
-        self.vga_gain = vga_gain
+        # LNA discrete gain levels (실제 RF 칩과 유사)
+        # MAX2829 예시: Low=0dB, Mid=15dB, High=30dB
+        self.lna_gains_db = [0, 15, 30]
+        self.current_lna_index = 1  # Mid gain (15dB)에서 시작
+
+        # VGA continuous gain range
+        self.vga_gain_db = 20.0      # 초기값 (mid-range)
+        self.vga_min_db = 0.0
+        self.vga_max_db = 40.0
+
+        # LPF 설정
         self.lpf_alpha = lpf_alpha
-        print(f"Unified RF Path initialized: LNA={lna_gain}dB, VGA={vga_gain}dB")
+
+        # Gain transition thresholds
+        self.vga_high_threshold = self.vga_max_db - 5  # VGA 35dB 넘으면 LNA 조절
+        self.vga_low_threshold = self.vga_min_db + 5   # VGA 5dB 밑이면 LNA 조절
+
+        print(f"Multi-Stage AGC initialized: LNA={self.lna_gains_db[self.current_lna_index]}dB (discrete), VGA={self.vga_gain_db}dB (continuous)")
 
     def run(self, x: np.ndarray) -> np.ndarray:
         """
@@ -219,26 +235,95 @@ class UnifiedRFPath:
             처리된 신호
         """
         # LNA → Mixer → VGA → LPF
-        x = lna(x, self.lna_gain)
+        current_lna_gain = self.lna_gains_db[self.current_lna_index]
+        x = lna(x, current_lna_gain)
         x = mixer(x, lo=1.0)
-        x = vga(x, self.vga_gain)
+        x = vga(x, self.vga_gain_db)
         x = lpf(x, self.lpf_alpha)
         return x
 
+    def update_gain_hierarchical(self, peak: float) -> dict:
+        """
+        계층적 AGC 업데이트 (Multi-Stage Gain Control)
+
+        동작 순서:
+        1. VGA fine adjustment (continuous, 빠름)
+        2. VGA 범위 체크
+        3. VGA 한계 도달 시 LNA coarse adjustment (discrete, 느림)
+
+        Args:
+            peak: 신호 peak 값 (0-1 normalized)
+
+        Returns:
+            dict: 변경 정보 {'lna_changed': bool, 'vga_changed': bool, 'total_gain_db': float}
+        """
+        lna_changed = False
+        vga_changed = False
+        old_lna_index = self.current_lna_index
+        old_vga_gain = self.vga_gain_db
+
+        # Step 1: VGA Fine Adjustment (연속 조절)
+        if peak > 0.9:
+            # 포화 방지: VGA 감소
+            self.vga_gain_db -= 1.0
+            vga_changed = True
+        elif peak < 0.25:
+            # SNR 향상: VGA 증가
+            self.vga_gain_db += 1.0
+            vga_changed = True
+
+        # Step 2: VGA 범위 체크 후 LNA Coarse Adjustment (단계별 조절)
+        if self.vga_gain_db > self.vga_high_threshold:
+            # VGA가 최대 근처 → LNA 감소 (신호 강함)
+            if self.current_lna_index > 0:
+                self.current_lna_index -= 1  # LNA gain down (30→15 또는 15→0)
+                self.vga_gain_db = 20.0      # VGA 중간값으로 리셋
+                lna_changed = True
+                print(f"  [LNA DOWN] {self.lna_gains_db[old_lna_index]}dB → {self.lna_gains_db[self.current_lna_index]}dB, VGA reset to {self.vga_gain_db}dB")
+
+        elif self.vga_gain_db < self.vga_low_threshold:
+            # VGA가 최소 근처 → LNA 증가 (신호 약함)
+            if self.current_lna_index < len(self.lna_gains_db) - 1:
+                self.current_lna_index += 1  # LNA gain up (0→15 또는 15→30)
+                self.vga_gain_db = 20.0      # VGA 중간값으로 리셋
+                lna_changed = True
+                print(f"  [LNA UP] {self.lna_gains_db[old_lna_index]}dB → {self.lna_gains_db[self.current_lna_index]}dB, VGA reset to {self.vga_gain_db}dB")
+
+        # Step 3: VGA 범위 제한 (clipping)
+        self.vga_gain_db = np.clip(self.vga_gain_db, self.vga_min_db, self.vga_max_db)
+
+        return {
+            'lna_changed': lna_changed,
+            'vga_changed': vga_changed,
+            'old_lna_db': self.lna_gains_db[old_lna_index],
+            'new_lna_db': self.lna_gains_db[self.current_lna_index],
+            'old_vga_db': old_vga_gain,
+            'new_vga_db': self.vga_gain_db,
+            'total_gain_db': self.get_total_gain()
+        }
+
     def set_vga_gain(self, gain_db: float):
         """
-        VGA 이득 조절 (Gain Control Feedback)
+        VGA 이득 직접 설정 (호환성 유지)
 
         Args:
             gain_db: VGA 이득 (dB)
         """
-        self.vga_gain = gain_db
+        self.vga_gain_db = np.clip(gain_db, self.vga_min_db, self.vga_max_db)
 
     def get_total_gain(self) -> float:
         """
-        총 이득 반환
+        총 이득 반환 (LNA + VGA)
 
         Returns:
             총 이득 (dB)
         """
-        return self.lna_gain + self.vga_gain
+        return self.lna_gains_db[self.current_lna_index] + self.vga_gain_db
+
+    def get_lna_gain(self) -> float:
+        """현재 LNA 이득 반환"""
+        return self.lna_gains_db[self.current_lna_index]
+
+    def get_vga_gain(self) -> float:
+        """현재 VGA 이득 반환"""
+        return self.vga_gain_db

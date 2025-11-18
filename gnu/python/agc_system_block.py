@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 GNURadio AGC System Block
-Adaptive AGC 처리: RF path → ADC → Digital Truncation → Gain Feedback
+Multi-Stage Adaptive AGC: LNA (discrete) + VGA (continuous) + Digital Truncation
 """
 
 import numpy as np
@@ -11,7 +11,7 @@ import pmt
 
 class agc_system_block(gr.sync_block):
     """
-    AGC System 블록
+    AGC System 블록 (Multi-Stage)
 
     Parameters:
         agc_mode: 'adaptive', 'low_power', 'high_performance'
@@ -29,10 +29,24 @@ class agc_system_block(gr.sync_block):
         self.agc_mode = agc_mode
         self.enable_gain_feedback = enable_gain_feedback
 
-        # RF parameters
-        self.lna_gain_db = 20.0  # 고정 LNA gain
-        self.vga_gain_db = 20.0  # 가변 VGA gain (초기값)
-        self.lpf_alpha = 0.2     # LPF coefficient
+        # Multi-Stage RF parameters
+        # LNA: discrete gain levels (0, 15, 30 dB)
+        self.lna_gains_db = [0, 15, 30]
+        self.current_lna_index = 1  # Mid gain (15dB)
+
+        # VGA: continuous gain (0-40 dB)
+        self.vga_gain_db = 20.0
+        self.vga_min_db = 0.0
+        self.vga_max_db = 40.0
+
+        # VGA transition thresholds
+        self.vga_high_threshold = self.vga_max_db - 5  # 35dB
+        self.vga_low_threshold = self.vga_min_db + 5   # 5dB
+
+        # LPF parameters
+        self.lpf_alpha = 0.2
+        self.lpf_state_i = 0.0
+        self.lpf_state_q = 0.0
 
         # ADC parameters
         self.adc_bits = 10       # ADC는 항상 10-bit
@@ -43,23 +57,23 @@ class agc_system_block(gr.sync_block):
         # Digital truncation bits
         if self.agc_mode == 'low_power':
             self.current_digital_bits = 5
-            self.current_gain_db = 15.0  # 고정
+            # Fixed: LNA 15dB + VGA 0dB = 15dB
+            self.current_lna_index = 1
+            self.vga_gain_db = 0.0
         elif self.agc_mode == 'high_performance':
             self.current_digital_bits = 10
-            self.current_gain_db = 40.0  # 고정
+            # Fixed: LNA 30dB + VGA 10dB = 40dB
+            self.current_lna_index = 2
+            self.vga_gain_db = 10.0
         else:  # adaptive
             self.current_digital_bits = 5  # 초기값
-            self.current_gain_db = 30.0     # 초기값
+            # Adaptive: LNA 15dB + VGA 20dB = 35dB
+            self.current_lna_index = 1
+            self.vga_gain_db = 20.0
 
         # Gain feedback parameters
-        self.gain_min_db = 10.0
-        self.gain_max_db = 50.0
         self.peak_high_threshold = 0.9
         self.peak_low_threshold = 0.25
-
-        # LPF state (IIR filter)
-        self.lpf_state_i = 0.0
-        self.lpf_state_q = 0.0
 
         # Block processing
         self.block_size = 2560  # STF length (128 bits × 20 samples/symbol)
@@ -87,15 +101,16 @@ class agc_system_block(gr.sync_block):
                     self.current_digital_bits = 10
 
     def apply_rf_path(self, signal):
-        """UnifiedRFPath: LNA → Mixer → VGA → LPF"""
-        # LNA (고정 20dB)
-        lna_gain_linear = 10**(self.lna_gain_db / 20)
+        """Multi-Stage RF Path: LNA (discrete) → Mixer → VGA (continuous) → LPF"""
+        # LNA (discrete gain)
+        lna_gain_db = self.lna_gains_db[self.current_lna_index]
+        lna_gain_linear = 10**(lna_gain_db / 20)
         signal = signal * lna_gain_linear
 
-        # Mixer (주파수 변환, 여기서는 baseband이므로 생략)
+        # Mixer (주파수 변환, baseband이므로 생략)
         # signal = signal * np.exp(1j * 2 * np.pi * f_lo * t)
 
-        # VGA (가변 gain)
+        # VGA (continuous gain)
         vga_gain_linear = 10**(self.vga_gain_db / 20)
         signal = signal * vga_gain_linear
 
@@ -147,31 +162,48 @@ class agc_system_block(gr.sync_block):
 
         return truncated
 
-    def update_gain_feedback(self, signal_block):
-        """Gain 피드백 (peak-based)"""
+    def update_gain_hierarchical(self, peak):
+        """
+        계층적 AGC 업데이트 (Multi-Stage Gain Control)
+
+        1. VGA fine adjustment (continuous, 빠름)
+        2. VGA 범위 체크
+        3. VGA 한계 시 LNA coarse adjustment (discrete, 느림)
+        """
         if not self.enable_gain_feedback:
             return  # Fixed 모드는 gain 고정
 
         if self.agc_mode in ['low_power', 'high_performance']:
             return  # Fixed 모드는 gain 고정
 
-        # Peak 측정
-        peak = np.max(np.abs(signal_block))
+        old_lna_index = self.current_lna_index
+        old_vga_gain = self.vga_gain_db
 
-        # Gain 조정
+        # Step 1: VGA Fine Adjustment
         if peak > self.peak_high_threshold:
             self.vga_gain_db -= 1.0  # Saturation 방지
         elif peak < self.peak_low_threshold:
             self.vga_gain_db += 1.0  # SNR 향상
 
-        # Gain 범위 제한 (총 gain = LNA 20dB + VGA)
-        total_gain = self.lna_gain_db + self.vga_gain_db
-        total_gain = np.clip(total_gain, self.gain_min_db, self.gain_max_db)
-        self.vga_gain_db = total_gain - self.lna_gain_db
+        # Step 2: VGA 범위 체크 후 LNA Coarse Adjustment
+        if self.vga_gain_db > self.vga_high_threshold:
+            # VGA 최대 근처 → LNA 감소
+            if self.current_lna_index > 0:
+                self.current_lna_index -= 1
+                self.vga_gain_db = 20.0  # VGA 리셋
 
-        # 현재 총 gain 저장
-        self.current_gain_db = total_gain
-        self.gain_history.append(total_gain)
+        elif self.vga_gain_db < self.vga_low_threshold:
+            # VGA 최소 근처 → LNA 증가
+            if self.current_lna_index < len(self.lna_gains_db) - 1:
+                self.current_lna_index += 1
+                self.vga_gain_db = 20.0  # VGA 리셋
+
+        # Step 3: VGA 범위 제한
+        self.vga_gain_db = np.clip(self.vga_gain_db, self.vga_min_db, self.vga_max_db)
+
+    def get_total_gain(self):
+        """총 이득 반환 (LNA + VGA)"""
+        return self.lna_gains_db[self.current_lna_index] + self.vga_gain_db
 
     def process_block(self, signal_block):
         """블록 단위 처리"""
@@ -182,15 +214,20 @@ class agc_system_block(gr.sync_block):
         digital_output = self.apply_adc_quantization(rf_output)
 
         # 3. Gain feedback (다음 블록에 적용)
-        self.update_gain_feedback(digital_output)
+        peak = np.max(np.abs(digital_output)) if len(digital_output) > 0 else 0.0
+        self.update_gain_hierarchical(peak)
 
         self.total_blocks += 1
 
         # 통계 메시지 전송
         if self.total_blocks % 10 == 0:
             stats = pmt.make_dict()
-            stats = pmt.dict_add(stats, pmt.intern('gain_db'),
-                                pmt.from_double(self.current_gain_db))
+            stats = pmt.dict_add(stats, pmt.intern('total_gain_db'),
+                                pmt.from_double(self.get_total_gain()))
+            stats = pmt.dict_add(stats, pmt.intern('lna_gain_db'),
+                                pmt.from_double(self.lna_gains_db[self.current_lna_index]))
+            stats = pmt.dict_add(stats, pmt.intern('vga_gain_db'),
+                                pmt.from_double(self.vga_gain_db))
             stats = pmt.dict_add(stats, pmt.intern('digital_bits'),
                                 pmt.from_long(self.current_digital_bits))
             stats = pmt.dict_add(stats, pmt.intern('total_blocks'),
