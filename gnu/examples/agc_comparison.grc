@@ -136,7 +136,7 @@ blocks:
     alias: ''
     agc_mode: low_power
     comment: ''
-    enable_gain_feedback: 'False'
+    enable_gain_feedback: 'True'
     maxoutbuf: '0'
     minoutbuf: '0'
   states:
@@ -160,7 +160,7 @@ blocks:
     alias: ''
     agc_mode: high_performance
     comment: ''
-    enable_gain_feedback: 'False'
+    enable_gain_feedback: 'True'
     maxoutbuf: '0'
     minoutbuf: '0'
   states:

@@ -9,8 +9,8 @@ Python 기반 AGC 시스템을 GNURadio 블록으로 변환하여 GUI에서 실�
 ### 주요 기능
 
 - **3가지 AGC 모델 비교**:
-  - Low-Power AGC (15dB gain, 5-bit digital)
-  - High-Performance AGC (40dB gain, 10-bit digital)
+  - Low-Power AGC (5-bit digital 고정, gain은 AGC로 조절)
+  - High-Performance AGC (10-bit digital 고정, gain은 AGC로 조절)
   - Adaptive AGC (gain 피드백 + traffic-based digital bits)
 
 - **실시간 시각화**:
@@ -154,9 +154,11 @@ gain = clip(gain, 10, 50)  # 범위 제한
 
 | Mode | Gain (dB) | Digital Bits | Gain Feedback |
 |------|-----------|--------------|---------------|
-| Low-Power | 15 (고정) | 5 (고정) | Disabled |
-| High-Performance | 40 (고정) | 10 (고정) | Disabled |
-| Adaptive | 10-50 (가변) | 5 or 10 (traffic 기반) | Enabled |
+| Low-Power | 가변 (AGC 자동 조절) | 5 (고정) | Enabled |
+| High-Performance | 가변 (AGC 자동 조절) | 10 (고정) | Enabled |
+| Adaptive | 가변 (AGC 자동 조절) | 5 or 10 (traffic 기반) | Enabled |
+
+**중요**: 모든 모델이 AGC를 사용하여 gain을 자동 조절합니다. Fixed 모델은 디지털 비트만 고정하고, Adaptive 모델은 디지털 비트도 traffic type에 따라 적응합니다.
 
 ---
 
@@ -268,17 +270,17 @@ total_energy_mJ = analog_energy_mJ + (digital_energy_pJ / 1e9)
 
 | Model | Gain | Digital Bits | BER | Analog Energy | Digital Energy |
 |-------|------|--------------|-----|---------------|----------------|
-| Low-Power | 15 dB | 5-bit | 8.43×10⁻⁸ | 0.4949 mJ | 0.19 mJ |
-| High-Performance | 40 dB | 10-bit | 2.54×10⁻¹⁰ | 0.4949 mJ | 2.63 mJ |
-| Adaptive | 10-50 dB | 5-bit | 8.43×10⁻⁸ | 0.4949 mJ | 0.19 mJ |
+| Low-Power | 가변 (AGC) | 5-bit | 8.43×10⁻⁸ | 0.4949 mJ | 0.19 mJ |
+| High-Performance | 가변 (AGC) | 10-bit | 2.54×10⁻¹⁰ | 0.4949 mJ | 2.63 mJ |
+| Adaptive | 가변 (AGC) | 5-bit | 8.43×10⁻⁸ | 0.4949 mJ | 0.19 mJ |
 
 ### SNR = 10 dB, High Performance Signal
 
 | Model | Gain | Digital Bits | BER | Analog Energy | Digital Energy |
 |-------|------|--------------|-----|---------------|----------------|
-| Low-Power | 15 dB | 5-bit | 8.43×10⁻⁸ | 0.4949 mJ | 0.19 mJ |
-| High-Performance | 40 dB | 10-bit | 2.54×10⁻¹⁰ | 0.4949 mJ | 2.63 mJ |
-| Adaptive | 10-50 dB | 10-bit | 2.54×10⁻¹⁰ | 0.4949 mJ | 2.63 mJ |
+| Low-Power | 가변 (AGC) | 5-bit | 8.43×10⁻⁸ | 0.4949 mJ | 0.19 mJ |
+| High-Performance | 가변 (AGC) | 10-bit | 2.54×10⁻¹⁰ | 0.4949 mJ | 2.63 mJ |
+| Adaptive | 가변 (AGC) | 10-bit | 2.54×10⁻¹⁰ | 0.4949 mJ | 2.63 mJ |
 
 **Adaptive AGC 장점**:
 - Low Power Signal: LP와 동일한 에너지 (저전력)
