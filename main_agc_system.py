@@ -611,30 +611,25 @@ class AgcSystem:
 # 종래모델 2개 (고정 동작, FSM 제거)
 # =========================
 class FixedLowPowerAGC(AgcSystem):
-    """저전력 고정 AGC - 항상 15dB gain / 5-bit digital"""
+    """
+    저전력 고정 AGC - 디지털 비트는 5-bit 고정, gain은 자동 조절
+
+    특징:
+    - Digital bits: 항상 5-bit (고정)
+    - Gain control: AGC 피드백 활성화 (자동 조절)
+    - 정책: 저전력 디지털 설정 유지
+    """
 
     def __init__(self):
-        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=False)
-        self.current_gain_db = 15.0  # 고정 gain
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=True)
         self.current_digital_bits = 5  # 고정 5-bit
-        self.current_gain_linear = 10**(15/20)
-
-        # Multi-Stage AGC: LNA와 VGA를 고정값으로 설정
-        # 총 15dB = LNA 15dB + VGA 0dB
-        self.rf_path.current_lna_index = 1  # 15dB
-        self.rf_path.vga_gain_db = 0.0
-        print(f"Fixed Low-Power AGC: LNA={self.rf_path.get_lna_gain()}dB, VGA={self.rf_path.get_vga_gain()}dB, Total={self.rf_path.get_total_gain()}dB")
+        print(f"Fixed Low-Power AGC: Digital=5-bit (fixed), Gain=AUTO (AGC enabled)")
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        # 고정 세팅: gain과 digital bits 고정
-        self.current_gain_db = 15.0
+        # 디지털 비트만 고정 (gain은 AGC로 자동 조절됨)
         self.current_digital_bits = 5
 
-        # Multi-Stage AGC 고정
-        self.rf_path.current_lna_index = 1  # 15dB
-        self.rf_path.vga_gain_db = 0.0
-
-        # 적응 차단
+        # 디지털 비트 적응 차단 (항상 5-bit 유지)
         original_update = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda *a, **k: None
         try:
@@ -644,30 +639,25 @@ class FixedLowPowerAGC(AgcSystem):
 
 
 class FixedHighPerformanceAGC(AgcSystem):
-    """고성능 고정 AGC - 항상 40dB gain / 10-bit digital"""
+    """
+    고성능 고정 AGC - 디지털 비트는 10-bit 고정, gain은 자동 조절
+
+    특징:
+    - Digital bits: 항상 10-bit (고정)
+    - Gain control: AGC 피드백 활성화 (자동 조절)
+    - 정책: 고성능 디지털 설정 유지
+    """
 
     def __init__(self):
-        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=False)
-        self.current_gain_db = 40.0  # 고정 gain
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=True)
         self.current_digital_bits = 10  # 고정 10-bit
-        self.current_gain_linear = 10**(40/20)
-
-        # Multi-Stage AGC: LNA와 VGA를 고정값으로 설정
-        # 총 40dB = LNA 30dB + VGA 10dB
-        self.rf_path.current_lna_index = 2  # 30dB
-        self.rf_path.vga_gain_db = 10.0
-        print(f"Fixed High-Performance AGC: LNA={self.rf_path.get_lna_gain()}dB, VGA={self.rf_path.get_vga_gain()}dB, Total={self.rf_path.get_total_gain()}dB")
+        print(f"Fixed High-Performance AGC: Digital=10-bit (fixed), Gain=AUTO (AGC enabled)")
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        # 고정 세팅: gain과 digital bits 고정
-        self.current_gain_db = 40.0
+        # 디지털 비트만 고정 (gain은 AGC로 자동 조절됨)
         self.current_digital_bits = 10
 
-        # Multi-Stage AGC 고정
-        self.rf_path.current_lna_index = 2  # 30dB
-        self.rf_path.vga_gain_db = 10.0
-
-        # 적응 차단
+        # 디지털 비트 적응 차단 (항상 10-bit 유지)
         original_update = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda *a, **k: None
         try:
