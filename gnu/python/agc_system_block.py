@@ -57,14 +57,16 @@ class agc_system_block(gr.sync_block):
         # Digital truncation bits
         if self.agc_mode == 'low_power':
             self.current_digital_bits = 5
-            # Fixed: LNA 15dB + VGA 0dB = 15dB
+            # Fixed LP: 디지털 비트만 고정, gain은 AGC로 조절
+            # 초기값: LNA 15dB + VGA 20dB = 35dB
             self.current_lna_index = 1
-            self.vga_gain_db = 0.0
+            self.vga_gain_db = 20.0
         elif self.agc_mode == 'high_performance':
             self.current_digital_bits = 10
-            # Fixed: LNA 30dB + VGA 10dB = 40dB
-            self.current_lna_index = 2
-            self.vga_gain_db = 10.0
+            # Fixed HP: 디지털 비트만 고정, gain은 AGC로 조절
+            # 초기값: LNA 15dB + VGA 20dB = 35dB
+            self.current_lna_index = 1
+            self.vga_gain_db = 20.0
         else:  # adaptive
             self.current_digital_bits = 5  # 초기값
             # Adaptive: LNA 15dB + VGA 20dB = 35dB
@@ -169,12 +171,13 @@ class agc_system_block(gr.sync_block):
         1. VGA fine adjustment (continuous, 빠름)
         2. VGA 범위 체크
         3. VGA 한계 시 LNA coarse adjustment (discrete, 느림)
+
+        모든 모델에서 AGC 활성화됨 (gain 자동 조절)
+        Fixed 모델: 디지털 비트만 고정
+        Adaptive 모델: 디지털 비트도 적응
         """
         if not self.enable_gain_feedback:
-            return  # Fixed 모드는 gain 고정
-
-        if self.agc_mode in ['low_power', 'high_performance']:
-            return  # Fixed 모드는 gain 고정
+            return  # Gain feedback 비활성화 시 (실제로는 항상 True)
 
         old_lna_index = self.current_lna_index
         old_vga_gain = self.vga_gain_db
