@@ -101,6 +101,9 @@ class AgcSystem:
         # Multi-Stage AGC: LNA discrete + VGA continuous
         self.rf_path = UnifiedRFPath(lpf_alpha=0.2)
 
+        # 초기 gain을 RF path에 설정 (동기화)
+        self.rf_path.set_total_gain(self.current_gain_db)
+
         # 디지털 파트: truncation 비트 수만 변경 (5비트 또는 10비트)
         self.current_digital_bits = initial_digital_bits  # 디지털 처리에 사용할 비트 수
         self.digital_area_model = DigitalAreaModel()
@@ -372,10 +375,14 @@ class AgcSystem:
                 self.stf_power_db, AGC_TARGET_POWER_DB, AGC_COARSE_STEP_DB
             )
 
+            # RF path에 새로운 gain 설정
+            self.rf_path.set_total_gain(self.current_gain_db)
+
             if DEBUG_MODE:
                 print(f"  [FSM] {AgcState.DETECT.value} → {AgcState.COARSE_AGC.value}")
                 print(f"    STF Power: {self.stf_power_db:.2f} dBFS, Target: {AGC_TARGET_POWER_DB:.2f} dBFS")
                 print(f"    Coarse Gain Adjustment: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
+                print(f"    RF Path Gain: LNA={self.rf_path.get_lna_gain():.1f} dB + VGA={self.rf_path.get_vga_gain():.1f} dB = {self.rf_path.get_total_gain():.1f} dB")
 
         # ========== 4. AGC FSM: COARSE_AGC → TRACK ==========
         # 교수님 피드백: STF에서만 gain 결정, LTF는 gain 조정 안 함

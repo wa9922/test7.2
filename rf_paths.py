@@ -320,6 +320,51 @@ class UnifiedRFPath:
         """
         return self.lna_gains_db[self.current_lna_index] + self.vga_gain_db
 
+    def set_total_gain(self, target_gain_db: float):
+        """
+        총 이득을 설정 (LNA + VGA 자동 분배)
+
+        계층적 gain 분배:
+        1. 가능한 한 VGA로 조절 (continuous, 빠름)
+        2. VGA 범위 초과 시 LNA 조절 (discrete, 느림)
+
+        Args:
+            target_gain_db: 목표 총 이득 (dB)
+        """
+        # Range 체크
+        min_total = self.lna_gains_db[0] + self.vga_min_db  # 0 + 0 = 0 dB
+        max_total = self.lna_gains_db[-1] + self.vga_max_db  # 30 + 40 = 70 dB
+        target_gain_db = np.clip(target_gain_db, min_total, max_total)
+
+        # LNA 선택 (가능한 한 VGA 사용 우선)
+        best_lna_index = 0
+        best_vga_gain = 0.0
+
+        for lna_index in range(len(self.lna_gains_db)):
+            lna_gain = self.lna_gains_db[lna_index]
+            required_vga_gain = target_gain_db - lna_gain
+
+            # VGA 범위 내인 경우
+            if self.vga_min_db <= required_vga_gain <= self.vga_max_db:
+                best_lna_index = lna_index
+                best_vga_gain = required_vga_gain
+                break
+        else:
+            # 모든 LNA 레벨에서 VGA 범위 초과하는 경우
+            # 가장 가까운 조합 선택
+            if target_gain_db < self.lna_gains_db[0] + self.vga_min_db:
+                # Too low
+                best_lna_index = 0
+                best_vga_gain = self.vga_min_db
+            else:
+                # Too high
+                best_lna_index = len(self.lna_gains_db) - 1
+                best_vga_gain = self.vga_max_db
+
+        # 설정 적용
+        self.current_lna_index = best_lna_index
+        self.vga_gain_db = best_vga_gain
+
     def get_lna_gain(self) -> float:
         """현재 LNA 이득 반환"""
         return self.lna_gains_db[self.current_lna_index]
