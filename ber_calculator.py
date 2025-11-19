@@ -162,13 +162,15 @@ class BERCalculator:
         # STF 부분 추출 (신호의 시작 부분이라고 가정)
         stf_signal_received = received_signal[:expected_signal_length]
 
+        # 신호 전력 계산 (결과 딕셔너리에 포함되므로 항상 계산)
+        signal_power = np.mean(np.abs(stf_signal_received)**2)
+
         # SNR: AGC는 신호와 노이즈를 같이 증폭하므로 SNR은 불변
         # 따라서 channel_snr_db를 그대로 사용
         if channel_snr_db is not None:
             snr_db = channel_snr_db
         else:
             # Fallback: 신호로부터 계산 (이전 방식, AGC 영향 받음)
-            signal_power = np.mean(np.abs(stf_signal_received)**2)
             snr_linear = signal_power / noise_power if noise_power > 0 else float('inf')
             snr_db = 10 * np.log10(snr_linear) if snr_linear > 0 else -np.inf
 
