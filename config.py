@@ -152,3 +152,21 @@ PLOT_RESULTS = True
 # --- 아날로그 단일화 플래그 ---
 UNIFIED_ANALOG_ALWAYS_ON = True    # 항상 RX on(동일 전력)
 ADC_MAX_BITS             = 10      # 실제 ADC 고정 비트
+
+# --- AGC State Machine (교수님 피드백 반영) ---
+# Preamble power 측정 기반 gain control을 위한 FSM states
+from enum import Enum
+
+class AgcState(Enum):
+    """AGC State Machine States"""
+    IDLE = "IDLE"              # 대기 상태 (패킷 없음)
+    DETECT = "DETECT"          # 패킷 감지 (carrier sensing)
+    COARSE_AGC = "COARSE_AGC"  # STF 기반 coarse gain adjustment
+    FINE_AGC = "FINE_AGC"      # LTF 기반 fine gain adjustment
+    TRACK = "TRACK"            # Gain 고정, 패킷 수신 (Signal Field + Payload)
+
+# AGC gain adjustment parameters
+AGC_TARGET_POWER_DB = -10.0    # 목표 신호 전력 (dBFS)
+AGC_COARSE_STEP_DB = 3.0       # Coarse adjustment step
+AGC_FINE_STEP_DB = 1.0         # Fine adjustment step
+AGC_POWER_TOLERANCE_DB = 2.0   # 허용 오차

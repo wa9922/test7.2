@@ -39,7 +39,11 @@ from collections import defaultdict
 from carrier_sensing import CarrierSensingTop
 from signal_generator import SignalGenerator
 from ber_calculator import BERCalculator
-from config import SAMPLING_RATE, NOISE_POWER, DEBUG_MODE, PLOT_RESULTS, TRAFFIC_ADC_RESOLUTION, DIGITAL_TRUNCATION_BITS, select_mcs_from_snr
+from config import (
+    SAMPLING_RATE, NOISE_POWER, DEBUG_MODE, PLOT_RESULTS,
+    TRAFFIC_ADC_RESOLUTION, DIGITAL_TRUNCATION_BITS, select_mcs_from_snr,
+    AgcState, AGC_TARGET_POWER_DB, AGC_COARSE_STEP_DB, AGC_FINE_STEP_DB, AGC_POWER_TOLERANCE_DB
+)
 from power_measurement import DigitalComputationMeasurement, AnalogPowerMeasurement
 from adc import ADC5bit, ADC10bit
 from rf_paths import UnifiedRFPath
@@ -71,15 +75,19 @@ class AgcSystem:
             enable_gain_feedback: gain 피드백 활성화 여부 (Fixed 모델은 False)
         """
         print("=" * 60)
-        print("Initializing Adaptive AGC Control System (Unified Analog, Pure Feedback)")
+        print("Initializing Adaptive AGC Control System (Unified Analog, FSM-based)")
         print("=" * 60)
 
         self.use_correlation_detection = use_correlation_detection
         self.enable_gain_feedback = enable_gain_feedback  # Gain feedback 제어
 
-        # 순수 피드백 기반 AGC: FSM 제거, 직접 gain 변수 사용
-        # Multi-Stage AGC에서는 RF path의 총 gain을 추적
-        self.current_gain_db: float = 35.0  # 초기 gain: LNA 15dB + VGA 20dB = 35 dB
+        # AGC State Machine (교수님 피드백 반영)
+        self.agc_state = AgcState.IDLE
+        self.current_gain_db: float = 30.0  # 초기 gain (moderate)
+
+        # Preamble power 측정값 저장
+        self.stf_power_db = None
+        self.ltf_power_db = None
 
         self.signal_generator = SignalGenerator()
         self.ber_calculator = BERCalculator()
@@ -223,34 +231,64 @@ class AgcSystem:
             if DEBUG_MODE:
                 print(f"Error updating system configuration: {e}")
 
+    def measure_signal_power_db(self, signal: np.ndarray) -> float:
+        """신호의 평균 전력을 dB로 측정"""
+        power_linear = np.mean(np.abs(signal)**2)
+        if power_linear > 0:
+            return 10 * np.log10(power_linear)
+        else:
+            return -np.inf
+
+    def adjust_gain_based_on_power(self, measured_power_db: float, target_power_db: float, step_db: float) -> float:
+        """
+        측정된 power와 목표 power의 차이에 따라 gain 조정
+
+        Args:
+            measured_power_db: 측정된 신호 전력 (dBFS)
+            target_power_db: 목표 신호 전력 (dBFS)
+            step_db: 조정 step size
+
+        Returns:
+            새로운 gain (dB)
+        """
+        power_error = target_power_db - measured_power_db
+
+        # Power error에 따라 gain 조정
+        if abs(power_error) > AGC_POWER_TOLERANCE_DB:
+            gain_adjustment = power_error  # power 부족 → gain 증가, power 과다 → gain 감소
+            # Step size로 제한
+            if abs(gain_adjustment) > step_db:
+                gain_adjustment = step_db if gain_adjustment > 0 else -step_db
+            new_gain_db = self.current_gain_db + gain_adjustment
+        else:
+            new_gain_db = self.current_gain_db  # 허용 범위 내, 조정 안 함
+
+        # Gain range 제한 (10~50 dB)
+        new_gain_db = np.clip(new_gain_db, 10.0, 50.0)
+        return new_gain_db
+
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 10) -> Dict:
         """
-        패킷 처리 (교수님 피드백 반영: STF에서만 AGC 동작)
+        패킷 처리 (교수님 피드백 반영: FSM 기반 AGC, Preamble power 측정)
 
-        동작 순서:
-        1. 채널: AWGN 노이즈 추가
-        2. STF 구간에서만 AGC 동작 (gain 결정)
-        3. 결정된 gain으로 전체 패킷을 한 번에 RF 증폭
-        4. ADC 양자화 + 디지털 truncation
-        5. Signal field 디코딩 → 트래픽 타입 파악
-        6. 트래픽 타입에 따라 디지털 비트 재선택 (Adaptive만)
-        7. BER 계산 (STF 구간)
-        8. 전력 측정
+        AGC FSM 동작:
+        1. IDLE → DETECT: Carrier sensing으로 패킷 감지
+        2. DETECT → COARSE_AGC: STF power 측정 → coarse gain adjustment
+        3. COARSE_AGC → FINE_AGC: LTF power 측정 → fine gain adjustment
+        4. FINE_AGC → TRACK: Gain 고정, Signal Field + Payload 수신
+        5. TRACK → IDLE: 패킷 처리 완료
         """
         self.current_traffic_type = packet_info['traffic_type']
 
         # 제안모델: indicator 디코딩 전까지 5-bit digital로 시작
         if self.use_indicator_for_adc:
-            # 초기에는 5-bit digital truncation
             self.current_digital_bits = 5
         else:
-            # (종래/레거시) 메타 기반 설정
             self.update_adc_resolution_for_traffic(self.current_traffic_type)
 
         if DEBUG_MODE:
             print(f"\n--- Processing Packet: {packet_info['traffic_type']} ---")
-            print(f"    ADC Resolution (hardware): {self.current_adc_resolution} bits (always 10-bit)")
-            print(f"    Digital bits (start): {self.current_digital_bits} bits")
+            print(f"    Initial AGC State: {self.agc_state.value}")
 
         # ========== 1. 채널: AWGN 노이즈 추가 ==========
         clean_signal = packet_info["complete_signal"]
@@ -260,26 +298,71 @@ class AgcSystem:
         noise = np.sqrt(noise_power / 2) * (np.random.randn(len(clean_signal)) + 1j * np.random.randn(len(clean_signal)))
         noisy_signal = clean_signal + noise
 
-        # ========== 2. STF 구간에서만 AGC 동작 (gain 결정) ==========
-        # STF (Short Training Field)는 패킷 맨 앞에 위치, AGC용으로 사용
+        # 패킷 구간 인덱스
         stf_end_idx = packet_info["stf_end_idx"]
-        stf_signal = noisy_signal[0:stf_end_idx]
+        ltf_start_idx = stf_end_idx
+        ltf_end_idx = packet_info["signal_field_start_idx"]  # LTF는 preamble의 두 번째 부분
 
-        gain_info = None
+        # ========== 2. AGC FSM: IDLE → DETECT ==========
+        self.agc_state = AgcState.DETECT
+        if DEBUG_MODE:
+            print(f"  [FSM] {AgcState.IDLE.value} → {AgcState.DETECT.value}")
+
+        # ========== 3. AGC FSM: DETECT → COARSE_AGC ==========
+        # STF 구간 처리 (coarse gain adjustment)
+        self.agc_state = AgcState.COARSE_AGC
+
         if self.enable_gain_feedback:
-            # STF peak 기반 gain 조정 (Multi-Stage AGC)
-            peak_stf = float(np.max(np.abs(stf_signal))) if len(stf_signal) > 0 else 0.0
-            gain_info = self.rf_path.update_gain_hierarchical(peak_stf)
-            self.current_gain_db = gain_info['total_gain_db']
+            # STF 신호 추출 (현재 gain으로 증폭)
+            stf_signal = noisy_signal[0:stf_end_idx]
+            stf_amplified = self.process_rf_only(stf_signal)
+
+            # STF power 측정 (dBFS)
+            self.stf_power_db = self.measure_signal_power_db(stf_amplified)
+
+            # Coarse gain adjustment
+            old_gain = self.current_gain_db
+            self.current_gain_db = self.adjust_gain_based_on_power(
+                self.stf_power_db, AGC_TARGET_POWER_DB, AGC_COARSE_STEP_DB
+            )
 
             if DEBUG_MODE:
-                print(f"  [STF-based AGC] Peak={peak_stf:.3f}, Final Gain={self.current_gain_db:.1f} dB")
-                if gain_info['lna_changed']:
-                    print(f"    LNA: {gain_info['old_lna_db']:.0f} → {gain_info['new_lna_db']:.0f} dB")
-                if gain_info['vga_changed']:
-                    print(f"    VGA: {gain_info['old_vga_db']:.1f} → {gain_info['new_vga_db']:.1f} dB")
+                print(f"  [FSM] {AgcState.DETECT.value} → {AgcState.COARSE_AGC.value}")
+                print(f"    STF Power: {self.stf_power_db:.2f} dBFS, Target: {AGC_TARGET_POWER_DB:.2f} dBFS")
+                print(f"    Coarse Gain Adjustment: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
 
-        # ========== 3. 결정된 gain으로 전체 패킷을 한 번에 RF 증폭 ==========
+        # ========== 4. AGC FSM: COARSE_AGC → FINE_AGC ==========
+        # LTF 구간 처리 (fine gain adjustment)
+        self.agc_state = AgcState.FINE_AGC
+
+        if self.enable_gain_feedback:
+            # LTF 신호 추출 (업데이트된 gain으로 증폭)
+            ltf_signal = noisy_signal[ltf_start_idx:ltf_end_idx]
+            ltf_amplified = self.process_rf_only(ltf_signal)
+
+            # LTF power 측정 (dBFS)
+            self.ltf_power_db = self.measure_signal_power_db(ltf_amplified)
+
+            # Fine gain adjustment
+            old_gain = self.current_gain_db
+            self.current_gain_db = self.adjust_gain_based_on_power(
+                self.ltf_power_db, AGC_TARGET_POWER_DB, AGC_FINE_STEP_DB
+            )
+
+            if DEBUG_MODE:
+                print(f"  [FSM] {AgcState.COARSE_AGC.value} → {AgcState.FINE_AGC.value}")
+                print(f"    LTF Power: {self.ltf_power_db:.2f} dBFS, Target: {AGC_TARGET_POWER_DB:.2f} dBFS")
+                print(f"    Fine Gain Adjustment: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
+
+        # ========== 5. AGC FSM: FINE_AGC → TRACK ==========
+        # Gain 고정, 전체 패킷을 최종 gain으로 증폭
+        self.agc_state = AgcState.TRACK
+
+        if DEBUG_MODE:
+            print(f"  [FSM] {AgcState.FINE_AGC.value} → {AgcState.TRACK.value}")
+            print(f"    Final Gain: {self.current_gain_db:.1f} dB (locked)")
+
+        # ========== 6. 결정된 gain으로 전체 패킷을 한 번에 RF 증폭 ==========
         amplified_signal = self.process_rf_only(noisy_signal)
 
         # ========== 4. ADC 양자화 (10비트) + 디지털 truncation ==========
@@ -346,11 +429,18 @@ class AgcSystem:
             ber_operations=ber_operations
         )
 
+        # ========== 9. AGC FSM: TRACK → IDLE ==========
+        # 패킷 처리 완료, IDLE 상태로 복귀
+        self.agc_state = AgcState.IDLE
+
+        if DEBUG_MODE:
+            print(f"  [FSM] {AgcState.TRACK.value} → {AgcState.IDLE.value} (packet complete)")
+
         # ========== 패킷 결과 반환 ==========
         packet_result = {
             "packet_info": packet_info,
             "traffic_type": self.current_traffic_type,
-            "mcs": packet_mcs,  # MCS 정보 추가
+            "mcs": packet_mcs,  # MCS 정보
             "channel_snr_db": channel_snr_db,
             "final_gain_db": self.current_gain_db,
             "final_adc_resolution": self.current_adc_resolution,
@@ -363,7 +453,13 @@ class AgcSystem:
                 "average_power_mw": self.analog_power.get_average_power()
             },
             "digital_computation": self.digital_computation.get_operation_stats(),
-            "gain_info": gain_info
+            # AGC FSM 정보 추가
+            "agc_fsm": {
+                "final_state": self.agc_state.value,
+                "stf_power_db": self.stf_power_db,
+                "ltf_power_db": self.ltf_power_db,
+                "target_power_db": AGC_TARGET_POWER_DB,
+            }
         }
 
         self.processing_history.append(packet_result)
