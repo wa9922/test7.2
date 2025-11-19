@@ -224,6 +224,19 @@ class AgcSystem:
                 print(f"Error updating system configuration: {e}")
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 10) -> Dict:
+        """
+        패킷 처리 (교수님 피드백 반영: STF에서만 AGC 동작)
+
+        동작 순서:
+        1. 채널: AWGN 노이즈 추가
+        2. STF 구간에서만 AGC 동작 (gain 결정)
+        3. 결정된 gain으로 전체 패킷을 한 번에 RF 증폭
+        4. ADC 양자화 + 디지털 truncation
+        5. Signal field 디코딩 → 트래픽 타입 파악
+        6. 트래픽 타입에 따라 디지털 비트 재선택 (Adaptive만)
+        7. BER 계산 (STF 구간)
+        8. 전력 측정
+        """
         self.current_traffic_type = packet_info['traffic_type']
 
         # 제안모델: indicator 디코딩 전까지 5-bit digital로 시작
@@ -239,9 +252,7 @@ class AgcSystem:
             print(f"    ADC Resolution (hardware): {self.current_adc_resolution} bits (always 10-bit)")
             print(f"    Digital bits (start): {self.current_digital_bits} bits")
 
-        self._signal_field_extracted = False
-
-        # 채널: AWGN 노이즈 추가
+        # ========== 1. 채널: AWGN 노이즈 추가 ==========
         clean_signal = packet_info["complete_signal"]
         signal_power = np.mean(np.abs(clean_signal)**2)
         snr_linear = 10**(channel_snr_db / 10)
@@ -249,155 +260,106 @@ class AgcSystem:
         noise = np.sqrt(noise_power / 2) * (np.random.randn(len(clean_signal)) + 1j * np.random.randn(len(clean_signal)))
         noisy_signal = clean_signal + noise
 
-        # 실제 AGC 동작: 블록 단위로 처리 (전체 신호를 한 번에 처리하지 않음!)
-        # 각 블록마다 현재 gain으로 RF 증폭 → ADC 양자화 → Gain 피드백
-        received_signal = np.zeros_like(noisy_signal)  # 결과 저장용
+        # ========== 2. STF 구간에서만 AGC 동작 (gain 결정) ==========
+        # STF (Short Training Field)는 패킷 맨 앞에 위치, AGC용으로 사용
+        stf_end_idx = packet_info["stf_end_idx"]
+        stf_signal = noisy_signal[0:stf_end_idx]
 
-        # 블록 처리 준비
-        stf_length_samples = packet_info["stf_end_idx"]
-        block_size = calculate_block_size(stf_length_samples)
-        processing_results = []
+        gain_info = None
+        if self.enable_gain_feedback:
+            # STF peak 기반 gain 조정 (Multi-Stage AGC)
+            peak_stf = float(np.max(np.abs(stf_signal))) if len(stf_signal) > 0 else 0.0
+            gain_info = self.rf_path.update_gain_hierarchical(peak_stf)
+            self.current_gain_db = gain_info['total_gain_db']
 
-        HIGH_THR = 0.90
-        LOW_THR  = 0.25
-        STEP_DB  = 1.0
-        EPS      = 1e-12
+            if DEBUG_MODE:
+                print(f"  [STF-based AGC] Peak={peak_stf:.3f}, Final Gain={self.current_gain_db:.1f} dB")
+                if gain_info['lna_changed']:
+                    print(f"    LNA: {gain_info['old_lna_db']:.0f} → {gain_info['new_lna_db']:.0f} dB")
+                if gain_info['vga_changed']:
+                    print(f"    VGA: {gain_info['old_vga_db']:.1f} → {gain_info['new_vga_db']:.1f} dB")
 
-        for block_idx in range(0, len(noisy_signal), block_size):
-            block_end = min(block_idx + block_size, len(noisy_signal))
+        # ========== 3. 결정된 gain으로 전체 패킷을 한 번에 RF 증폭 ==========
+        amplified_signal = self.process_rf_only(noisy_signal)
 
-            # ========== 실제 AGC 동작 ==========
-            # 1. 노이즈 신호에서 현재 블록 추출
-            noisy_block = noisy_signal[block_idx:block_end]
-            if len(noisy_block) == 0:
-                continue
+        # ========== 4. ADC 양자화 (10비트) + 디지털 truncation ==========
+        quantized_signal = self.apply_adc_quantization(amplified_signal)
 
-            # 2. 현재 gain으로 RF 증폭 (LNA + VGA)
-            amplified_block = self.process_rf_only(noisy_block)
+        # ========== 5. Signal field 디코딩 (트래픽 타입 파악) ==========
+        signal_field_indication = self.extract_signal_field_indication(packet_info, quantized_signal)
 
-            # 3. ADC 양자화 (10비트) + 디지털 truncation (5 or 10비트)
-            quantized_block = self.apply_adc_quantization(amplified_block)
+        # ========== 6. 트래픽 타입에 따라 디지털 비트 재선택 (Adaptive만) ==========
+        if self.use_indicator_for_adc and signal_field_indication:
+            old_bits = self.current_digital_bits
+            self.update_adc_resolution_for_traffic(signal_field_indication)
+            self.current_traffic_type = signal_field_indication
 
-            # 결과 저장
-            received_signal[block_idx:block_end] = quantized_block
-            signal_block = quantized_block
-            # ====================================
+            if DEBUG_MODE:
+                print(f"[Signal Field] traffic={signal_field_indication}, digital_bits: {old_bits} → {self.current_digital_bits}")
 
-            # 4. Carrier sensing (양자화된 신호로)
-            cs_result = self.carrier_sensing.process_signal(signal_block)
-            cs_operations = self._calculate_cs_operations(len(signal_block))
+            # 디지털 비트가 변경되었으면 재양자화
+            if self.current_digital_bits != old_bits:
+                quantized_signal = self.apply_adc_quantization(amplified_signal)
 
-            # 5. Signal field 디코딩 (트래픽 타입 파악)
-            signal_field_indication = None
-            if (block_idx >= packet_info["signal_field_start_idx"] and not self._signal_field_extracted):
-                signal_field_indication = self.extract_signal_field_indication(packet_info, received_signal)
-                self._signal_field_extracted = True
-                if self.use_indicator_for_adc and signal_field_indication:
-                    # 디지털 비트 수 업데이트 (5비트 또는 10비트로)
-                    self.update_adc_resolution_for_traffic(signal_field_indication)
-                    self.current_traffic_type = signal_field_indication
-                    if DEBUG_MODE:
-                        print(f"[Indicator] traffic={signal_field_indication}, digital_bits={self.current_digital_bits}")
-                    # 재처리: 새로운 디지털 비트로 다시 양자화
-                    quantized_block = self.apply_adc_quantization(amplified_block)
-                    received_signal[block_idx:block_end] = quantized_block
-                    signal_block = quantized_block
+        # ========== 7. BER 계산 (STF 구간) ==========
+        stf_quantized = quantized_signal[0:stf_end_idx]
+        ber_result = self.ber_calculator.process_stf_block(
+            stf_quantized, noise_power,
+            adc_bits=self.current_digital_bits,
+            channel_snr_db=channel_snr_db
+        )
+        self.ber_history.append(ber_result["ber"])
 
-            # 6. Gain 피드백 (Multi-Stage AGC: LNA + VGA 계층적 조절)
-            # Fixed 모델은 gain feedback 비활성화
-            gain_info = None
-            if self.enable_gain_feedback:
-                # 현재 블록의 peak를 측정하여 다음 블록에 적용할 gain 조절
-                peak_blk = float(np.max(np.abs(signal_block))) if len(signal_block) > 0 else 0.0
-
-                # Multi-Stage AGC: RF path가 LNA/VGA를 계층적으로 조절
-                gain_info = self.rf_path.update_gain_hierarchical(peak_blk)
-
-                # 총 gain 업데이트
-                self.current_gain_db = gain_info['total_gain_db']
-
-                if DEBUG_MODE and (gain_info['lna_changed'] or gain_info['vga_changed']):
-                    print(f"  [Multi-Stage AGC] Peak={peak_blk:.3f}")
-                    if gain_info['lna_changed']:
-                        print(f"    LNA: {gain_info['old_lna_db']:.0f} → {gain_info['new_lna_db']:.0f} dB (discrete)")
-                    if gain_info['vga_changed']:
-                        print(f"    VGA: {gain_info['old_vga_db']:.1f} → {gain_info['new_vga_db']:.1f} dB (continuous)")
-                    print(f"    Total Gain: {gain_info['total_gain_db']:.1f} dB")
-                # 주의: 현재 블록은 재처리하지 않음! 다음 블록에 새 gain 적용됨
-
-            # BER (STF 구간만) - 디지털 비트 수 반영
-            ber_result = None
-            ber_operations = {'multiplications': 0, 'additions': 0}
-            if block_idx < packet_info["stf_end_idx"]:
-                ber_result = self.ber_calculator.process_stf_block(
-                    signal_block, noise_power, adc_bits=self.current_digital_bits,
-                    channel_snr_db=channel_snr_db  # 채널 SNR 직접 전달 (AGC 무관)
-                )
-                self.ber_history.append(ber_result["ber"])
-                ber_operations = self._calculate_ber_operations()
-
-            # 전력/로그
-            block_power = np.mean(np.abs(signal_block)**2)
-            block_power_db = 10 * np.log10(block_power) if block_power > 0 else -np.inf
-            self.power_history.append(block_power_db)
-
-            # 비트 수에 따른 동적 처리 시간 계산 (Latency용)
-            block_processing_time = self.calculate_block_processing_time(self.current_digital_bits)
-
-            # 아날로그는 실제 신호 시간에만 비례 (모든 모델 동일)
-            # 패킷의 실제 물리적 시간 = 샘플 수 / 샘플링 레이트
-            from config import SAMPLING_RATE
-            analog_block_time_ms = (len(signal_block) / SAMPLING_RATE) * 1000  # ms
-
-            self._update_power_measurements(
-                analog_duration_ms=analog_block_time_ms,  # 아날로그: 고정 시간
-                digital_duration_ms=block_processing_time,  # 디지털: 비트 종속
-                block_size=len(signal_block),
-                ber_result=ber_result,
-                cs_operations=cs_operations,
-                ber_operations=ber_operations
-            )
-
-            processing_results.append({
-                "block_idx": block_idx,
-                "carrier_sensing": cs_result,
-                "gain_db": self.current_gain_db,
-                "adc_resolution": self.current_adc_resolution,
-                "digital_bits": self.current_digital_bits,  # 블록 처리에 사용된 디지털 비트
-                "processing_time_ms": block_processing_time,  # 블록 처리 시간
-                "ber": ber_result,
-                "signal_power_db": block_power_db,
-                "gain_changed": (gain_info is not None and (gain_info['lna_changed'] or gain_info['vga_changed'])) if self.enable_gain_feedback else False,
-                "time_ms": self.time_series_collector.get_current_time()
-            })
-
-        # 패킷 결과
+        # 전체 패킷 BER도 계산
         final_ber_result = self.ber_calculator.process_complete_packet(
-            packet_info, received_signal, noise_power, channel_snr_db=channel_snr_db,
+            packet_info, quantized_signal, noise_power,
+            channel_snr_db=channel_snr_db,
             adc_bits=self.current_digital_bits
         )
 
-        # 총 처리 시간 계산 (Latency)
-        # 각 블록의 실제 처리 시간 합산 (블록마다 다른 디지털 비트 반영)
-        total_latency_ms = sum([
-            block["processing_time_ms"]
-            for block in processing_results
-        ])
+        # ========== 8. 전력 측정 ==========
+        # Carrier sensing 연산량 (STF 구간 기준)
+        cs_operations = self._calculate_cs_operations(len(stf_quantized))
 
+        # BER 계산 연산량
+        ber_operations = self._calculate_ber_operations()
+
+        # 처리 시간 계산
+        from config import SAMPLING_RATE
+
+        # 아날로그: 실제 신호 시간 (모든 모델 동일)
+        analog_duration_ms = (len(clean_signal) / SAMPLING_RATE) * 1000  # ms
+
+        # 디지털: 비트 수에 비례하는 처리 시간
+        digital_duration_ms = self.calculate_block_processing_time(self.current_digital_bits)
+
+        # 전력 업데이트
+        self._update_power_measurements(
+            analog_duration_ms=analog_duration_ms,
+            digital_duration_ms=digital_duration_ms,
+            block_size=len(quantized_signal),
+            ber_result=ber_result,
+            cs_operations=cs_operations,
+            ber_operations=ber_operations
+        )
+
+        # ========== 패킷 결과 반환 ==========
         packet_result = {
             "packet_info": packet_info,
+            "traffic_type": self.current_traffic_type,
             "channel_snr_db": channel_snr_db,
             "final_gain_db": self.current_gain_db,
             "final_adc_resolution": self.current_adc_resolution,
+            "final_digital_bits": self.current_digital_bits,
             "final_ber": final_ber_result,
-            "block_results": processing_results,
-            "processing_blocks": len(processing_results),
-            "total_latency_ms": total_latency_ms,  # 총 처리 시간 (비트 수 반영)
+            "stf_ber": ber_result,
+            "total_latency_ms": digital_duration_ms,
             "analog_power": {
                 "total_energy_mj": self.analog_power.get_total_energy(),
                 "average_power_mw": self.analog_power.get_average_power()
             },
-            "digital_computation": self.digital_computation.get_operation_stats()
+            "digital_computation": self.digital_computation.get_operation_stats(),
+            "gain_info": gain_info
         }
 
         self.processing_history.append(packet_result)
@@ -493,26 +455,24 @@ class AgcSystem:
                        snr_range_db: List[float] = None,  # Deprecated, uses TRAFFIC_SNR_RANGE
                        packets_per_scenario: int = 20) -> Dict:
         """
-        AGC 시스템 시뮬레이션 실행
+        AGC 시스템 시뮬레이션 실행 (교수님 피드백 반영: SNR은 주어진 채널 환경)
 
         Args:
             traffic_types: 시뮬레이션할 트래픽 타입 리스트
-            snr_range_db: (Deprecated) 트래픽별 SNR은 config.TRAFFIC_SNR_RANGE에서 자동 설정
-            packets_per_scenario: 각 (traffic, SNR) 시나리오당 패킷 수
+            snr_range_db: SNR 범위 (None이면 config.CHANNEL_SNR_RANGE 사용)
+            packets_per_scenario: 각 (SNR, traffic) 시나리오당 패킷 수
         """
-        from config import TRAFFIC_SNR_RANGE
+        from config import CHANNEL_SNR_RANGE
+
+        # SNR 범위 결정
+        if snr_range_db is None:
+            snr_range_db = CHANNEL_SNR_RANGE
 
         print("=" * 80)
         print("Starting AGC System Comprehensive Simulation")
         print(f"Traffic Types: {', '.join(traffic_types)}")
+        print(f"Channel SNR Range: {snr_range_db} dB (주어진 채널 환경)")
         print(f"Packets per scenario: {packets_per_scenario}")
-        print("=" * 80)
-
-        # 트래픽별 SNR 범위 출력
-        print("\nTraffic-specific SNR ranges:")
-        for traffic in traffic_types:
-            snr_range = TRAFFIC_SNR_RANGE.get(traffic, [10])
-            print(f"  {traffic}: {snr_range} dB")
         print("=" * 80)
 
         simulation_results = {
@@ -523,27 +483,26 @@ class AgcSystem:
 
         packet_counter = 0
 
-        # 트래픽별로 순회 (각 traffic은 고유한 SNR 범위 사용)
-        for traffic_type in traffic_types:
-            # 트래픽별 SNR 범위 가져오기
-            snr_range = TRAFFIC_SNR_RANGE.get(traffic_type, [10])
-
-            for snr_db in snr_range:
+        # SNR 우선 순회 (채널 환경이 먼저 주어짐)
+        for snr_db in snr_range_db:
+            # 각 SNR에서 모든 트래픽 타입 테스트
+            for traffic_type in traffic_types:
                 scenario_results = []
 
                 for _ in range(packets_per_scenario):
                     current_time = self.time_series_collector.get_current_time()
                     print(f"\n--- Time: {current_time:.1f}ms | Packet {packet_counter + 1}: "
-                          f"{traffic_type.upper()} traffic at {snr_db} dB SNR ---")
+                          f"{traffic_type.upper()} at SNR {snr_db} dB (channel) ---")
 
                     packet_info = self.signal_generator.create_complete_packet(traffic_type)
                     result = self.process_packet(packet_info, snr_db)
                     scenario_results.append(result)
 
                     packet_counter += 1
-                    print(f"  Packet processed")
-                    print(f"    Current Analog Power: {self.analog_power.get_average_power():.2f} mW")
-                    print(f"    Digital Energy so far: {self.digital_computation.get_total_energy():.2f} pJ")
+                    print(f"  Processed - Digital bits: {result.get('final_digital_bits', 'N/A')}")
+                    print(f"    Gain: {result.get('final_gain_db', 0):.1f} dB")
+                    print(f"    Analog Power: {self.analog_power.get_average_power():.2f} mW")
+                    print(f"    Digital Energy: {self.digital_computation.get_total_energy():.2f} pJ")
 
                 if scenario_results:
                     scenario_summary = self._calculate_scenario_statistics(scenario_results, snr_db, traffic_type)
