@@ -9,13 +9,24 @@
 - 전력 비교는 디지털 연산량만 차이 (아날로그 전력 동일)
 
 요약:
-- 한 파일만 실행해서 모델 비교 그래프 3개만 저장
+- 한 파일만 실행해서 모델 비교 그래프 8개 생성
 - 모델: 종래 2개(Fixed 5-bit, Fixed 10-bit) + 제안(Adaptive 5/10-bit)
 - 제안모델: Signal Field indicator 디코딩 시점에 DIGITAL_TRUNCATION_BITS 기반으로 디지털 비트 선택
-- 그래프:
-  1) metrics_energy.png   : 아날로그(mJ) / 디지털(pJ) 에너지 사용량 (모델별)
-  2) metrics_accuracy.png : 평균 BER (모델별)
-  3) metrics_latency.png  : 평균 지연(패킷당) (모델별)
+
+- 그래프 (총 8개, X축은 모두 연속적 값):
+  SNR 기반 선 그래프 (3개):
+  1) metrics_energy.png    : Digital Energy vs SNR
+  2) metrics_accuracy.png  : BER vs SNR (log scale)
+  3) metrics_latency.png   : Latency vs SNR
+
+  SNR 기반 연산량 (1개):
+  4) metrics_operations.png : Additions & Multiplications vs SNR
+
+  전체 평균값 막대 그래프 (4개):
+  5) metrics_energy_efficiency.png : bits/Joule
+  6) metrics_sqnr.png             : SQNR (dB)
+  7) metrics_throughput.png       : bps
+  8) metrics_adc_bit_usage.png    : 5-bit vs 10-bit 사용 비율
 """
 
 import os
@@ -936,17 +947,14 @@ def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], out
 
 def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     """
-    확장 메트릭 그래프 (신규)
+    확장 메트릭 그래프
 
-    생성 그래프:
-    1. 연산량 (additions, multiplications, total)
-    2. 에너지 효율성 (bits/Joule)
-    3. SQNR
-    4. Throughput
-    5. SNR별 BER
-    6. 트래픽별 BER
-    7. 트래픽별 에너지
-    8. ADC 비트 사용 비율
+    생성 그래프 (모두 X축이 연속적인 값):
+    1. Operations vs SNR (Additions, Multiplications)
+    2. Energy Efficiency (bar chart, aggregate)
+    3. SQNR (bar chart, aggregate)
+    4. Throughput (bar chart, aggregate)
+    5. ADC Bit Usage (bar chart, model별 비율)
     """
     model_names = list(metrics_by_model.keys())
     colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
@@ -1026,65 +1034,7 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     plt.close()
     print("  ✓ Saved: metrics_throughput.png")
 
-    # 8) 트래픽별 BER (선 그래프)
-    traffic_types = sorted(metrics_by_model[model_names[0]]["ber_by_traffic"].keys())
-    x_pos = np.arange(len(traffic_types))
-
-    plt.figure(figsize=(10,6))
-    for model_name in model_names:
-        ber_values = [metrics_by_model[model_name]["ber_by_traffic"][tt] for tt in traffic_types]
-        color = colors.get(model_name, 'gray')
-        plt.plot(x_pos, ber_values, marker='o', label=model_name, linewidth=2, color=color)
-
-    plt.title('BER by Traffic Type')
-    plt.xlabel('Traffic Type')
-    plt.ylabel('BER (lower is better)')
-    plt.xticks(x_pos, traffic_types)
-    plt.yscale('log')  # Log scale for BER
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "metrics_ber_by_traffic.png"), dpi=120, bbox_inches='tight')
-    plt.close()
-    print("  ✓ Saved: metrics_ber_by_traffic.png")
-
-    # 9) 트래픽별 디지털 에너지 (선 그래프)
-    plt.figure(figsize=(10,6))
-    for model_name in model_names:
-        energy_values = [metrics_by_model[model_name]["energy_by_traffic"][tt] for tt in traffic_types]
-        color = colors.get(model_name, 'gray')
-        plt.plot(x_pos, energy_values, marker='o', label=model_name, linewidth=2, color=color)
-
-    plt.title('Digital Energy by Traffic Type')
-    plt.xlabel('Traffic Type')
-    plt.ylabel('Energy per packet (pJ)')
-    plt.xticks(x_pos, traffic_types)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "metrics_energy_by_traffic.png"), dpi=120, bbox_inches='tight')
-    plt.close()
-    print("  ✓ Saved: metrics_energy_by_traffic.png")
-
-    # 10) 트래픽별 Latency (선 그래프)
-    plt.figure(figsize=(10,6))
-    for model_name in model_names:
-        latency_values = [metrics_by_model[model_name]["latency_by_traffic"][tt] for tt in traffic_types]
-        color = colors.get(model_name, 'gray')
-        plt.plot(x_pos, latency_values, marker='o', label=model_name, linewidth=2, color=color)
-
-    plt.title('Latency by Traffic Type')
-    plt.xlabel('Traffic Type')
-    plt.ylabel('Latency (ms)')
-    plt.xticks(x_pos, traffic_types)
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "metrics_latency_by_traffic.png"), dpi=120, bbox_inches='tight')
-    plt.close()
-    print("  ✓ Saved: metrics_latency_by_traffic.png")
-
-    # 11) ADC 비트 사용 비율 (5비트 vs 10비트) - Bar chart 유지
+    # 8) ADC 비트 사용 비율 (5비트 vs 10비트) - Bar chart
     bit5_ratios = [metrics_by_model[k]["adc_bit_5_ratio"] for k in model_names]
     bit10_ratios = [metrics_by_model[k]["adc_bit_10_ratio"] for k in model_names]
 
@@ -1109,20 +1059,23 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
 
 
 def plot_all_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
-    """모든 메트릭 그래프 생성 (기존 3개 + 확장 8개)"""
+    """모든 메트릭 그래프 생성 (주요 3개 + 확장 5개 = 총 8개)"""
     print("\n" + "="*80)
     print("Generating all comparison graphs...")
     print("="*80)
 
-    # 기존 3개 그래프
+    # 주요 3개 그래프 (SNR 기반)
     plot_three_metrics_models(metrics_by_model, outdir)
 
-    # 확장 8개 그래프
+    # 확장 5개 그래프
     plot_extended_metrics(metrics_by_model, outdir)
 
     print("\n" + "="*80)
     print(f"All graphs saved to: {outdir}/")
-    print("Total: 11 comparison graphs generated")
+    print("Total: 8 comparison graphs generated")
+    print("  - 3 SNR-based line charts (Energy, BER, Latency)")
+    print("  - 1 SNR-based operation chart (Additions, Multiplications)")
+    print("  - 4 aggregate bar charts (Efficiency, SQNR, Throughput, ADC Usage)")
     print("="*80)
 
 
@@ -1159,7 +1112,7 @@ def main():
     adaptive.use_indicator_for_adc = True
     metrics_ad = run_one_model("Adaptive (Proposed)", adaptive)
 
-    # 모델별 메트릭 묶기 & 그래프 11종 생성
+    # 모델별 메트릭 묶기 & 그래프 8종 생성
     metrics_by_model = {
         "Low-Power Fixed (5-bit)": metrics_lp,
         "High-Perf Fixed (10-bit)": metrics_hp,
@@ -1168,7 +1121,7 @@ def main():
     if not os.path.exists(PLOTS_OUTDIR):
         os.makedirs(PLOTS_OUTDIR, exist_ok=True)
 
-    # 모든 메트릭 그래프 생성 (11개)
+    # 모든 메트릭 그래프 생성 (8개, 모두 X축이 연속적)
     plot_all_metrics(metrics_by_model, outdir=PLOTS_OUTDIR)
 
     print(f"\nPlots saved to: {os.path.abspath(PLOTS_OUTDIR)}")
