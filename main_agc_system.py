@@ -884,87 +884,48 @@ def compute_model_metrics(sim_result: Dict) -> Dict[str, float]:
     }
 
 def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], outdir: str = "."):
-    """3개 주요 메트릭 그래프: Energy, BER, Latency (SNR별 선 그래프)"""
+    """3개 주요 메트릭 그래프: Energy, BER, Latency (모델별 bar chart)"""
     model_names = list(metrics_by_model.keys())
-    colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
-    linestyles = {'Low-Power Fixed (5-bit)': '-', 'High-Perf Fixed (10-bit)': '--', 'Adaptive (Proposed)': '-'}
-    markers = {'Low-Power Fixed (5-bit)': 's', 'High-Perf Fixed (10-bit)': '^', 'Adaptive (Proposed)': 'o'}
+    colors = ['blue', 'red', 'green']
 
-    # 모든 모델의 SNR 값을 합쳐서 전체 SNR 범위 추출
-    all_snr_keys = set()
-    for model_name in model_names:
-        all_snr_keys.update(metrics_by_model[model_name]["ber_by_snr"].keys())
-    snr_keys = sorted(all_snr_keys)
-    snr_values = [int(k.replace("snr_", "").replace("db", "")) for k in snr_keys]
-
-    # 1) Digital Energy vs SNR
+    # 1) Digital Energy (bar chart)
     plt.figure(figsize=(10,6))
-    for model_name in model_names:
-        energy_values = [metrics_by_model[model_name]["energy_by_snr"].get(snr_key, None) for snr_key in snr_keys]
-        # None 값 제거
-        valid_points = [(snr, energy) for snr, energy in zip(snr_values, energy_values) if energy is not None]
-        if valid_points:
-            x_vals, y_vals = zip(*valid_points)
-            color = colors.get(model_name, 'gray')
-            linestyle = linestyles.get(model_name, '-')
-            marker = markers.get(model_name, 'o')
-            plt.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
-                    color=color, linestyle=linestyle, markersize=8)
-
-    plt.title('Digital Energy vs SNR')
-    plt.xlabel('SNR (dB)')
-    plt.ylabel('Energy per packet (pJ)')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    energy_values = [metrics_by_model[model_name]["total_digital_pj"] for model_name in model_names]
+    plt.bar(model_names, energy_values, color=colors, alpha=0.7, edgecolor='black')
+    plt.title('Total Digital Energy per Model')
+    plt.xlabel('AGC Model')
+    plt.ylabel('Total Digital Energy (pJ)')
+    plt.xticks(rotation=15, ha='right')
+    plt.grid(True, alpha=0.3, axis='y')
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_energy.png"), dpi=120, bbox_inches='tight')
     plt.close()
     print("  ✓ Saved: metrics_energy.png")
 
-    # 2) BER vs SNR
+    # 2) Average BER (bar chart)
     plt.figure(figsize=(10,6))
-    for model_name in model_names:
-        ber_values = [metrics_by_model[model_name]["ber_by_snr"].get(snr_key, None) for snr_key in snr_keys]
-        # None 값 제거
-        valid_points = [(snr, ber) for snr, ber in zip(snr_values, ber_values) if ber is not None]
-        if valid_points:
-            x_vals, y_vals = zip(*valid_points)
-            color = colors.get(model_name, 'gray')
-            linestyle = linestyles.get(model_name, '-')
-            marker = markers.get(model_name, 'o')
-            plt.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
-                    color=color, linestyle=linestyle, markersize=8)
-
-    plt.title('BER vs SNR')
-    plt.xlabel('SNR (dB)')
-    plt.ylabel('BER (lower is better)')
+    ber_values = [metrics_by_model[model_name]["avg_ber"] for model_name in model_names]
+    plt.bar(model_names, ber_values, color=colors, alpha=0.7, edgecolor='black')
+    plt.title('Average BER per Model')
+    plt.xlabel('AGC Model')
+    plt.ylabel('Average BER (lower is better)')
     plt.yscale('log')  # Log scale for BER
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    plt.xticks(rotation=15, ha='right')
+    plt.grid(True, alpha=0.3, axis='y')
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_accuracy.png"), dpi=120, bbox_inches='tight')
     plt.close()
     print("  ✓ Saved: metrics_accuracy.png")
 
-    # 3) Latency vs SNR
+    # 3) Average Latency (bar chart)
     plt.figure(figsize=(10,6))
-    for model_name in model_names:
-        latency_values = [metrics_by_model[model_name]["latency_by_snr"].get(snr_key, None) for snr_key in snr_keys]
-        # None 값 제거
-        valid_points = [(snr, latency) for snr, latency in zip(snr_values, latency_values) if latency is not None]
-        if valid_points:
-            x_vals, y_vals = zip(*valid_points)
-            color = colors.get(model_name, 'gray')
-            linestyle = linestyles.get(model_name, '-')
-            marker = markers.get(model_name, 'o')
-            plt.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
-                    color=color, linestyle=linestyle, markersize=8)
-
-    plt.title('Latency vs SNR')
-    plt.xlabel('SNR (dB)')
-    plt.ylabel('Latency (ms)')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
+    latency_values = [metrics_by_model[model_name]["avg_latency_ms"] for model_name in model_names]
+    plt.bar(model_names, latency_values, color=colors, alpha=0.7, edgecolor='black')
+    plt.title('Average Latency per Model')
+    plt.xlabel('AGC Model')
+    plt.ylabel('Average Latency (ms)')
+    plt.xticks(rotation=15, ha='right')
+    plt.grid(True, alpha=0.3, axis='y')
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_latency.png"), dpi=120, bbox_inches='tight')
     plt.close()
@@ -975,63 +936,36 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     """
     확장 메트릭 그래프
 
-    생성 그래프 (모두 X축이 연속적인 값):
-    1. Operations vs SNR (Additions, Multiplications)
+    생성 그래프 (모두 bar chart):
+    1. Operations (Additions, Multiplications)
     2. Energy Efficiency (bar chart, aggregate)
     3. SQNR (bar chart, aggregate)
     4. Throughput (bar chart, aggregate)
     5. ADC Bit Usage (bar chart, model별 비율)
     """
     model_names = list(metrics_by_model.keys())
-    colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
-    linestyles = {'Low-Power Fixed (5-bit)': '-', 'High-Perf Fixed (10-bit)': '--', 'Adaptive (Proposed)': '-'}
-    markers = {'Low-Power Fixed (5-bit)': 's', 'High-Perf Fixed (10-bit)': '^', 'Adaptive (Proposed)': 'o'}
+    colors = ['blue', 'red', 'green']
 
-    # 모든 모델의 SNR 값을 합쳐서 전체 SNR 범위 추출
-    all_snr_keys = set()
-    for model_name in model_names:
-        all_snr_keys.update(metrics_by_model[model_name]["ber_by_snr"].keys())
-    snr_keys = sorted(all_snr_keys)
-    snr_values = [int(k.replace("snr_", "").replace("db", "")) for k in snr_keys]
-
-    # 4) Operations vs SNR (Additions, Multiplications)
+    # 4) Operations (Additions, Multiplications) - bar chart
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
 
     # Additions
-    for model_name in model_names:
-        add_values = [metrics_by_model[model_name]["operations_by_snr"].get(snr_key, {}).get("additions", None) for snr_key in snr_keys]
-        valid_points = [(snr, adds) for snr, adds in zip(snr_values, add_values) if adds is not None]
-        if valid_points:
-            x_vals, y_vals = zip(*valid_points)
-            color = colors.get(model_name, 'gray')
-            linestyle = linestyles.get(model_name, '-')
-            marker = markers.get(model_name, 'o')
-            ax1.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
-                    color=color, linestyle=linestyle, markersize=8)
-
-    ax1.set_title('Additions vs SNR')
-    ax1.set_xlabel('SNR (dB)')
-    ax1.set_ylabel('Additions per packet')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    additions = [metrics_by_model[model_name]["total_additions"] for model_name in model_names]
+    ax1.bar(model_names, additions, color=colors, alpha=0.7, edgecolor='black')
+    ax1.set_title('Total Additions per Model')
+    ax1.set_xlabel('AGC Model')
+    ax1.set_ylabel('Total Additions')
+    ax1.tick_params(axis='x', rotation=15)
+    ax1.grid(True, alpha=0.3, axis='y')
 
     # Multiplications
-    for model_name in model_names:
-        mult_values = [metrics_by_model[model_name]["operations_by_snr"].get(snr_key, {}).get("multiplications", None) for snr_key in snr_keys]
-        valid_points = [(snr, mults) for snr, mults in zip(snr_values, mult_values) if mults is not None]
-        if valid_points:
-            x_vals, y_vals = zip(*valid_points)
-            color = colors.get(model_name, 'gray')
-            linestyle = linestyles.get(model_name, '-')
-            marker = markers.get(model_name, 'o')
-            ax2.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
-                    color=color, linestyle=linestyle, markersize=8)
-
-    ax2.set_title('Multiplications vs SNR')
-    ax2.set_xlabel('SNR (dB)')
-    ax2.set_ylabel('Multiplications per packet')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    multiplications = [metrics_by_model[model_name]["total_multiplications"] for model_name in model_names]
+    ax2.bar(model_names, multiplications, color=colors, alpha=0.7, edgecolor='black')
+    ax2.set_title('Total Multiplications per Model')
+    ax2.set_xlabel('AGC Model')
+    ax2.set_ylabel('Total Multiplications')
+    ax2.tick_params(axis='x', rotation=15)
+    ax2.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_operations.png"), dpi=120, bbox_inches='tight')
@@ -1107,7 +1041,7 @@ def plot_all_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     print("Generating all comparison graphs...")
     print("="*80)
 
-    # 주요 3개 그래프 (SNR 기반)
+    # 주요 3개 그래프 (모델별 bar chart)
     plot_three_metrics_models(metrics_by_model, outdir)
 
     # 확장 5개 그래프
@@ -1116,8 +1050,8 @@ def plot_all_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     print("\n" + "="*80)
     print(f"All graphs saved to: {outdir}/")
     print("Total: 8 comparison graphs generated")
-    print("  - 3 SNR-based line charts (Energy, BER, Latency)")
-    print("  - 1 SNR-based operation chart (Additions, Multiplications)")
+    print("  - 3 model comparison bar charts (Energy, BER, Latency)")
+    print("  - 1 operations comparison chart (Additions, Multiplications)")
     print("  - 4 aggregate bar charts (Efficiency, SQNR, Throughput, ADC Usage)")
     print("="*80)
 
