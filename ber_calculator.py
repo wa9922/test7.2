@@ -140,14 +140,15 @@ class BERCalculator:
         return ber
 
     def process_stf_block(self, received_signal: np.ndarray, noise_power: float = 0.1,
-                          adc_bits: int = 10) -> dict:
+                          adc_bits: int = 10, channel_snr_db: float = None) -> dict:
         """
         수신된 신호에서 STF 부분을 추출하고 BER을 계산합니다.
 
         Args:
-            received_signal (np.ndarray): 수신된 복소수 신호
-            noise_power (float): 노이즈 전력 (SNR 계산용)
+            received_signal (np.ndarray): 수신된 복소수 신호 (AGC 후)
+            noise_power (float): 노이즈 전력 (SNR 계산용, 사용 안 함)
             adc_bits (int): 디지털 비트 수 (BER 계산에 영향)
+            channel_snr_db (float): 실제 채널 SNR (AGC와 무관한 원본 SNR)
 
         Returns:
             dict: BER 계산 결과 및 통계
@@ -161,10 +162,15 @@ class BERCalculator:
         # STF 부분 추출 (신호의 시작 부분이라고 가정)
         stf_signal_received = received_signal[:expected_signal_length]
 
-        # SNR 계산 (신호 전력 대 노이즈 전력)
-        signal_power = np.mean(np.abs(stf_signal_received)**2)
-        snr_linear = signal_power / noise_power if noise_power > 0 else float('inf')
-        snr_db = 10 * np.log10(snr_linear) if snr_linear > 0 else -np.inf
+        # SNR: AGC는 신호와 노이즈를 같이 증폭하므로 SNR은 불변
+        # 따라서 channel_snr_db를 그대로 사용
+        if channel_snr_db is not None:
+            snr_db = channel_snr_db
+        else:
+            # Fallback: 신호로부터 계산 (이전 방식, AGC 영향 받음)
+            signal_power = np.mean(np.abs(stf_signal_received)**2)
+            snr_linear = signal_power / noise_power if noise_power > 0 else float('inf')
+            snr_db = 10 * np.log10(snr_linear) if snr_linear > 0 else -np.inf
 
         # ✅ 이론적 BER 계산 (양자화 에러 포함)
         current_ber = self.calculate_theoretical_ber_with_quantization(snr_db, adc_bits)
@@ -193,32 +199,33 @@ class BERCalculator:
 
         return result
     
-    def process_complete_packet(self, packet_info: dict, received_signal: np.ndarray, 
-                              noise_power: float = 0.1) -> dict:
+    def process_complete_packet(self, packet_info: dict, received_signal: np.ndarray,
+                              noise_power: float = 0.1, channel_snr_db: float = None) -> dict:
         """
         완전한 패킷에서 STF 부분만 추출하여 BER을 계산합니다.
-        
+
         Args:
             packet_info (dict): signal_generator에서 생성된 패킷 정보
             received_signal (np.ndarray): 수신된 신호
             noise_power (float): 노이즈 전력
-            
+            channel_snr_db (float): 실제 채널 SNR (AGC와 무관한 원본 SNR)
+
         Returns:
             dict: STF BER 분석 결과
         """
         # 패킷에서 STF 구간 추출
         stf_start = packet_info["stf_start_idx"]
         stf_end = packet_info["stf_end_idx"]
-        
+
         if len(received_signal) <= stf_end:
             print(f"Warning: Received signal too short for STF extraction")
             return {"ber": 0.0, "snr_db": 0.0, "errors": 0, "total_bits": 0}
-        
+
         # STF 신호 구간 추출
         received_stf_signal = received_signal[stf_start:stf_end]
-        
+
         # STF BER 계산
-        result = self.process_stf_block(received_stf_signal, noise_power)
+        result = self.process_stf_block(received_stf_signal, noise_power, channel_snr_db=channel_snr_db)
         
         print(f"STF BER Analysis:")
         print(f"  - Current BER: {result['ber']:.6f}")

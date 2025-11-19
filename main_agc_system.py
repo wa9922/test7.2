@@ -319,7 +319,8 @@ class AgcSystem:
             ber_operations = {'multiplications': 0, 'additions': 0}
             if block_idx < packet_info["stf_end_idx"]:
                 ber_result = self.ber_calculator.process_stf_block(
-                    signal_block, noise_power, adc_bits=self.current_digital_bits
+                    signal_block, noise_power, adc_bits=self.current_digital_bits,
+                    channel_snr_db=channel_snr_db  # 채널 SNR 직접 전달 (AGC 무관)
                 )
                 self.ber_history.append(ber_result["ber"])
                 ber_operations = self._calculate_ber_operations()
@@ -360,7 +361,9 @@ class AgcSystem:
             })
 
         # 패킷 결과
-        final_ber_result = self.ber_calculator.process_complete_packet(packet_info, received_signal, noise_power)
+        final_ber_result = self.ber_calculator.process_complete_packet(
+            packet_info, received_signal, noise_power, channel_snr_db=channel_snr_db
+        )
 
         # 총 처리 시간 계산 (Latency)
         # 각 블록의 실제 처리 시간 합산 (블록마다 다른 디지털 비트 반영)
