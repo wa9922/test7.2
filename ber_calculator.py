@@ -174,10 +174,43 @@ class BERCalculator:
             snr_linear = signal_power / noise_power if noise_power > 0 else float('inf')
             snr_db = 10 * np.log10(snr_linear) if snr_linear > 0 else -np.inf
 
-        # ✅ 이론적 BER 계산 (양자화 에러 포함)
-        current_ber = self.calculate_theoretical_ber_with_quantization(snr_db, adc_bits)
+        # ✅ 양자화 비트 수에 따른 BER 계산
+        # SQNR = 6.02 * N + 1.76 (dB)
+        sqnr_db = 6.02 * adc_bits + 1.76
 
-        # Simulate bit errors based on theoretical BER
+        # Convert to linear
+        snr_linear = 10**(snr_db / 10)
+        sqnr_linear = 10**(sqnr_db / 10)
+
+        # 양자화 효과를 더 크게 반영하기 위한 보정
+        # 실제로는 AGC 동작으로 신호가 포화될 수 있으므로 양자화 영향이 더 큼
+        # Quantization penalty factor (경험적 모델링)
+        if adc_bits <= 5:
+            quantization_penalty = 20.0  # 5비트는 양자화 영향이 매우 큼 (13 dB 감소)
+        elif adc_bits <= 7:
+            quantization_penalty = 10.0  # 7비트는 중간 (10 dB 감소)
+        else:
+            quantization_penalty = 1.0   # 10비트는 양자화 영향이 작음
+
+        # Effective SQNR with penalty
+        sqnr_eff_db = sqnr_db - 10 * np.log10(quantization_penalty)
+        sqnr_eff_linear = 10**(sqnr_eff_db / 10)
+
+        # Effective SNR considering quantization
+        # 1/SNR_eff = 1/SNR_channel + 1/SQNR_eff
+        if snr_linear > 0 and sqnr_eff_linear > 0:
+            snr_eff_linear = 1.0 / (1.0/snr_linear + 1.0/sqnr_eff_linear)
+        else:
+            snr_eff_linear = max(snr_linear, 1e-10)
+
+        # BPSK BER
+        from scipy.special import erfc
+        current_ber = 0.5 * erfc(np.sqrt(snr_eff_linear))
+
+        # Clip
+        current_ber = np.clip(current_ber, 1e-12, 0.5)
+
+        # Bit errors for statistics
         total_bits = self.stf_length
         bit_errors = int(current_ber * total_bits)
 
@@ -202,7 +235,7 @@ class BERCalculator:
         return result
     
     def process_complete_packet(self, packet_info: dict, received_signal: np.ndarray,
-                              noise_power: float = 0.1, channel_snr_db: float = None) -> dict:
+                              noise_power: float = 0.1, channel_snr_db: float = None, adc_bits: int = 10) -> dict:
         """
         완전한 패킷에서 STF 부분만 추출하여 BER을 계산합니다.
 
@@ -211,6 +244,7 @@ class BERCalculator:
             received_signal (np.ndarray): 수신된 신호
             noise_power (float): 노이즈 전력
             channel_snr_db (float): 실제 채널 SNR (AGC와 무관한 원본 SNR)
+            adc_bits (int): 디지털 비트 수
 
         Returns:
             dict: STF BER 분석 결과
@@ -227,7 +261,7 @@ class BERCalculator:
         received_stf_signal = received_signal[stf_start:stf_end]
 
         # STF BER 계산
-        result = self.process_stf_block(received_stf_signal, noise_power, channel_snr_db=channel_snr_db)
+        result = self.process_stf_block(received_stf_signal, noise_power, adc_bits=adc_bits, channel_snr_db=channel_snr_db)
         
         print(f"STF BER Analysis:")
         print(f"  - Current BER: {result['ber']:.6f}")

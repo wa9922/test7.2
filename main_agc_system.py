@@ -373,7 +373,8 @@ class AgcSystem:
 
         # 패킷 결과
         final_ber_result = self.ber_calculator.process_complete_packet(
-            packet_info, received_signal, noise_power, channel_snr_db=channel_snr_db
+            packet_info, received_signal, noise_power, channel_snr_db=channel_snr_db,
+            adc_bits=self.current_digital_bits
         )
 
         # 총 처리 시간 계산 (Latency)
@@ -1069,39 +1070,102 @@ def run_one_model(model_name: str, model_obj: AgcSystem) -> Dict[str, float]:
     )
     return compute_model_metrics(sim)
 
-def main():
+def main(num_iterations: int = 1000):
     print("=" * 100)
     print("Python-based AGC Comparison (Conventional vs Proposed)")
-    print("Comprehensive metrics: energy, accuracy, latency, operations, efficiency, SQNR, throughput, etc.")
+    print(f"Comprehensive metrics with {num_iterations} iterations averaging")
     print("=" * 100)
 
-    # 1) 종래 모델 - Low-Power Fixed
-    low_power = FixedLowPowerAGC()
-    metrics_lp = run_one_model("Low-Power Fixed (5-bit)", low_power)
+    # Initialize results storage
+    all_metrics_lp = []
+    all_metrics_hp = []
+    all_metrics_ad = []
 
-    # 2) 종래 모델 - High-Perf Fixed
-    high_perf = FixedHighPerformanceAGC()
-    metrics_hp = run_one_model("High-Perf Fixed (10-bit)", high_perf)
+    # Run iterations
+    for iteration in range(num_iterations):
+        if (iteration + 1) % 100 == 0:
+            print(f"\nProgress: {iteration + 1}/{num_iterations} iterations completed")
 
-    # 3) 제안 모델 - Adaptive (indicator 기반 비트 선택)
-    # 5비트로 시작, signal field 디코딩 후 트래픽에 맞게 5/10비트 선택
-    adaptive = AgcSystem(initial_digital_bits=5, use_correlation_detection=True)
-    adaptive.use_indicator_for_adc = True
-    metrics_ad = run_one_model("Adaptive (Proposed)", adaptive)
+        # 1) Low-Power Fixed
+        low_power = FixedLowPowerAGC()
+        metrics_lp = run_one_model("Low-Power Fixed (5-bit)", low_power)
+        all_metrics_lp.append(metrics_lp)
+
+        # 2) High-Perf Fixed
+        high_perf = FixedHighPerformanceAGC()
+        metrics_hp = run_one_model("High-Perf Fixed (10-bit)", high_perf)
+        all_metrics_hp.append(metrics_hp)
+
+        # 3) Adaptive
+        adaptive = AgcSystem(initial_digital_bits=5, use_correlation_detection=True)
+        adaptive.use_indicator_for_adc = True
+        metrics_ad = run_one_model("Adaptive (Proposed)", adaptive)
+        all_metrics_ad.append(metrics_ad)
+
+    print(f"\n\nAll {num_iterations} iterations completed. Averaging results...")
+
+    # Average metrics
+    def average_metrics(metrics_list):
+        """Average metrics across iterations"""
+        avg_metrics = {}
+        # Simple averages
+        for key in ['total_analog_mj', 'total_digital_pj', 'avg_ber', 'avg_latency_ms',
+                    'total_operations', 'total_additions', 'total_multiplications',
+                    'energy_efficiency_bits_per_joule', 'avg_sqnr_db', 'throughput_bps',
+                    'adc_bit_5_ratio', 'adc_bit_10_ratio', 'avg_adc_bits']:
+            avg_metrics[key] = float(np.mean([m[key] for m in metrics_list]))
+
+        # Dictionary averages (ber_by_snr, energy_by_snr, etc.)
+        for dict_key in ['ber_by_snr', 'energy_by_snr', 'latency_by_snr']:
+            avg_metrics[dict_key] = {}
+            all_keys = set()
+            for m in metrics_list:
+                all_keys.update(m[dict_key].keys())
+            for k in all_keys:
+                values = [m[dict_key].get(k, 0) for m in metrics_list]
+                avg_metrics[dict_key][k] = float(np.mean(values))
+
+        # Operations by SNR (nested dict)
+        avg_metrics['operations_by_snr'] = {}
+        all_keys = set()
+        for m in metrics_list:
+            all_keys.update(m['operations_by_snr'].keys())
+        for k in all_keys:
+            avg_metrics['operations_by_snr'][k] = {
+                'additions': int(np.mean([m['operations_by_snr'].get(k, {}).get('additions', 0) for m in metrics_list])),
+                'multiplications': int(np.mean([m['operations_by_snr'].get(k, {}).get('multiplications', 0) for m in metrics_list]))
+            }
+
+        # Traffic metrics
+        for dict_key in ['ber_by_traffic', 'energy_by_traffic', 'latency_by_traffic']:
+            avg_metrics[dict_key] = {}
+            all_keys = set()
+            for m in metrics_list:
+                all_keys.update(m[dict_key].keys())
+            for k in all_keys:
+                values = [m[dict_key].get(k, 0) for m in metrics_list]
+                avg_metrics[dict_key][k] = float(np.mean(values))
+
+        return avg_metrics
+
+    metrics_lp_avg = average_metrics(all_metrics_lp)
+    metrics_hp_avg = average_metrics(all_metrics_hp)
+    metrics_ad_avg = average_metrics(all_metrics_ad)
 
     # 모델별 메트릭 묶기 & 그래프 8종 생성
     metrics_by_model = {
-        "Low-Power Fixed (5-bit)": metrics_lp,
-        "High-Perf Fixed (10-bit)": metrics_hp,
-        "Adaptive (Proposed)": metrics_ad
+        "Low-Power Fixed (5-bit)": metrics_lp_avg,
+        "High-Perf Fixed (10-bit)": metrics_hp_avg,
+        "Adaptive (Proposed)": metrics_ad_avg
     }
     if not os.path.exists(PLOTS_OUTDIR):
         os.makedirs(PLOTS_OUTDIR, exist_ok=True)
 
-    # 모든 메트릭 그래프 생성 (8개, 모두 X축이 연속적)
+    # 모든 메트릭 그래프 생성 (8개)
     plot_all_metrics(metrics_by_model, outdir=PLOTS_OUTDIR)
 
     print(f"\nPlots saved to: {os.path.abspath(PLOTS_OUTDIR)}")
+    print(f"Results are averaged over {num_iterations} iterations")
     print("\nDone.")
 
 if __name__ == "__main__":
