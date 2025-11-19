@@ -787,25 +787,49 @@ def compute_model_metrics(sim_result: Dict) -> Dict[str, float]:
     total_time_sec = sum(r["latency_ms"] for r in rows) / 1000.0  # ms → sec
     throughput_bps = total_bits_transmitted / total_time_sec if total_time_sec > 0 else 0
 
-    # SNR별 BER 분석
+    # SNR별 분석 (BER, Energy, Latency, Operations)
     ber_by_snr = {}
+    energy_by_snr = {}
+    latency_by_snr = {}
+    operations_by_snr = {}
     snr_values = sorted(set(r["snr_db"] for r in rows))
     for snr in snr_values:
         snr_rows = [r for r in rows if r["snr_db"] == snr]
-        ber_by_snr[f"snr_{int(snr)}db"] = float(np.mean([r["ber"] for r in snr_rows]))
+        snr_key = f"snr_{int(snr)}db"
+        ber_by_snr[snr_key] = float(np.mean([r["ber"] for r in snr_rows]))
+
+        # SNR별 평균 디지털 에너지 (패킷당)
+        snr_energies = [snr_rows[i]["digital_total_pj"] - (snr_rows[i-1]["digital_total_pj"] if i > 0 else 0)
+                        for i in range(len(snr_rows))]
+        energy_by_snr[snr_key] = float(np.mean(snr_energies)) if snr_energies else 0
+
+        # SNR별 평균 레이턴시
+        latency_by_snr[snr_key] = float(np.mean([r["latency_ms"] for r in snr_rows]))
+
+        # SNR별 평균 연산량
+        if snr_rows:
+            operations_by_snr[snr_key] = {
+                "additions": int(np.mean([r["total_additions"] for r in snr_rows])),
+                "multiplications": int(np.mean([r["total_multiplications"] for r in snr_rows]))
+            }
 
     # 트래픽 타입별 분석
     ber_by_traffic = {}
     energy_by_traffic = {}
+    latency_by_traffic = {}
     traffic_types = set(r["traffic"] for r in rows)
     for traffic in traffic_types:
         traffic_rows = [r for r in rows if r["traffic"] == traffic]
         ber_by_traffic[traffic] = float(np.mean([r["ber"] for r in traffic_rows]))
+
         # 패킷 단위 에너지 (delta)
         traffic_energies = [traffic_rows[i]["digital_total_pj"] -
                            (traffic_rows[i-1]["digital_total_pj"] if i > 0 else 0)
                            for i in range(len(traffic_rows))]
         energy_by_traffic[traffic] = float(np.mean(traffic_energies)) if traffic_energies else 0
+
+        # 트래픽별 평균 레이턴시
+        latency_by_traffic[traffic] = float(np.mean([r["latency_ms"] for r in traffic_rows]))
 
     # ADC 비트 사용 비율 (5비트 vs 10비트)
     bit_5_count = sum(1 for r in rows if r["adc_bits"] == 5)
@@ -831,10 +855,16 @@ def compute_model_metrics(sim_result: Dict) -> Dict[str, float]:
         "avg_sqnr_db": avg_sqnr_db,
         "throughput_bps": throughput_bps,
 
-        # 상세 분석
+        # 상세 분석 (SNR별)
         "ber_by_snr": ber_by_snr,
+        "energy_by_snr": energy_by_snr,
+        "latency_by_snr": latency_by_snr,
+        "operations_by_snr": operations_by_snr,
+
+        # 상세 분석 (Traffic별)
         "ber_by_traffic": ber_by_traffic,
         "energy_by_traffic": energy_by_traffic,
+        "latency_by_traffic": latency_by_traffic,
 
         # ADC 비트 사용
         "adc_bit_5_ratio": adc_bit_5_ratio,
@@ -843,45 +873,60 @@ def compute_model_metrics(sim_result: Dict) -> Dict[str, float]:
     }
 
 def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], outdir: str = "."):
-    """기존 3개 그래프: 에너지, 정확도, 지연"""
-    labels = list(metrics_by_model.keys())
-    analog = [metrics_by_model[k]["total_analog_mj"] for k in labels]
-    digital = [metrics_by_model[k]["total_digital_pj"] for k in labels]
-    avg_ber = [metrics_by_model[k]["avg_ber"] for k in labels]
-    avg_lat = [metrics_by_model[k]["avg_latency_ms"] for k in labels]
+    """3개 주요 메트릭 그래프: Energy, BER, Latency (SNR별 선 그래프)"""
+    model_names = list(metrics_by_model.keys())
+    colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
 
-    # 1) 에너지
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12,5))
-    ax1.bar(labels, analog)
-    ax1.set_title('Analog Energy Usage (total)')
-    ax1.set_ylabel('mJ')
-    ax1.grid(True, alpha=0.3)
+    # SNR 범위 추출
+    snr_keys = sorted(metrics_by_model[model_names[0]]["ber_by_snr"].keys())
+    snr_values = [int(k.replace("snr_", "").replace("db", "")) for k in snr_keys]
 
-    ax2.bar(labels, digital)
-    ax2.set_title('Digital Energy Usage (total)')
-    ax2.set_ylabel('pJ')
-    ax2.grid(True, alpha=0.3)
+    # 1) Digital Energy vs SNR
+    plt.figure(figsize=(10,6))
+    for model_name in model_names:
+        energy_values = [metrics_by_model[model_name]["energy_by_snr"][snr_key] for snr_key in snr_keys]
+        color = colors.get(model_name, 'gray')
+        plt.plot(snr_values, energy_values, marker='o', label=model_name, linewidth=2, color=color)
+
+    plt.title('Digital Energy vs SNR')
+    plt.xlabel('SNR (dB)')
+    plt.ylabel('Energy per packet (pJ)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_energy.png"), dpi=120, bbox_inches='tight')
     plt.close()
     print("  ✓ Saved: metrics_energy.png")
 
-    # 2) 정확도
-    plt.figure(figsize=(8,6))
-    plt.bar(labels, avg_ber)
-    plt.title('Accuracy (Average BER)')
-    plt.ylabel('Average BER (lower is better)')
+    # 2) BER vs SNR
+    plt.figure(figsize=(10,6))
+    for model_name in model_names:
+        ber_values = [metrics_by_model[model_name]["ber_by_snr"][snr_key] for snr_key in snr_keys]
+        color = colors.get(model_name, 'gray')
+        plt.plot(snr_values, ber_values, marker='o', label=model_name, linewidth=2, color=color)
+
+    plt.title('BER vs SNR')
+    plt.xlabel('SNR (dB)')
+    plt.ylabel('BER (lower is better)')
+    plt.yscale('log')  # Log scale for BER
+    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_accuracy.png"), dpi=120, bbox_inches='tight')
     plt.close()
     print("  ✓ Saved: metrics_accuracy.png")
 
-    # 3) 지연
-    plt.figure(figsize=(8,6))
-    plt.bar(labels, avg_lat)
-    plt.title('Latency (Average per-packet delay)')
+    # 3) Latency vs SNR
+    plt.figure(figsize=(10,6))
+    for model_name in model_names:
+        latency_values = [metrics_by_model[model_name]["latency_by_snr"][snr_key] for snr_key in snr_keys]
+        color = colors.get(model_name, 'gray')
+        plt.plot(snr_values, latency_values, marker='o', label=model_name, linewidth=2, color=color)
+
+    plt.title('Latency vs SNR')
+    plt.xlabel('SNR (dB)')
     plt.ylabel('Latency (ms)')
+    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_latency.png"), dpi=120, bbox_inches='tight')
@@ -903,31 +948,39 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     7. 트래픽별 에너지
     8. ADC 비트 사용 비율
     """
-    labels = list(metrics_by_model.keys())
+    model_names = list(metrics_by_model.keys())
+    colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
 
-    # 4) 연산량 (Additions, Multiplications, Total)
-    adds = [metrics_by_model[k]["total_additions"] for k in labels]
-    mults = [metrics_by_model[k]["total_multiplications"] for k in labels]
-    ops = [metrics_by_model[k]["total_operations"] for k in labels]
+    # SNR 범위 추출
+    snr_keys = sorted(metrics_by_model[model_names[0]]["ber_by_snr"].keys())
+    snr_values = [int(k.replace("snr_", "").replace("db", "")) for k in snr_keys]
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15,5))
-    ax1.bar(labels, adds, color='skyblue')
-    ax1.set_title('Total Additions')
-    ax1.set_ylabel('Count')
+    # 4) Operations vs SNR (Additions, Multiplications)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14,5))
+
+    # Additions
+    for model_name in model_names:
+        add_values = [metrics_by_model[model_name]["operations_by_snr"][snr_key]["additions"] for snr_key in snr_keys]
+        color = colors.get(model_name, 'gray')
+        ax1.plot(snr_values, add_values, marker='o', label=model_name, linewidth=2, color=color)
+
+    ax1.set_title('Additions vs SNR')
+    ax1.set_xlabel('SNR (dB)')
+    ax1.set_ylabel('Additions per packet')
+    ax1.legend()
     ax1.grid(True, alpha=0.3)
-    ax1.tick_params(axis='x', rotation=15)
 
-    ax2.bar(labels, mults, color='salmon')
-    ax2.set_title('Total Multiplications')
-    ax2.set_ylabel('Count')
+    # Multiplications
+    for model_name in model_names:
+        mult_values = [metrics_by_model[model_name]["operations_by_snr"][snr_key]["multiplications"] for snr_key in snr_keys]
+        color = colors.get(model_name, 'gray')
+        ax2.plot(snr_values, mult_values, marker='o', label=model_name, linewidth=2, color=color)
+
+    ax2.set_title('Multiplications vs SNR')
+    ax2.set_xlabel('SNR (dB)')
+    ax2.set_ylabel('Multiplications per packet')
+    ax2.legend()
     ax2.grid(True, alpha=0.3)
-    ax2.tick_params(axis='x', rotation=15)
-
-    ax3.bar(labels, ops, color='lightgreen')
-    ax3.set_title('Total Operations')
-    ax3.set_ylabel('Count')
-    ax3.grid(True, alpha=0.3)
-    ax3.tick_params(axis='x', rotation=15)
 
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_operations.png"), dpi=120, bbox_inches='tight')
@@ -935,9 +988,9 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     print("  ✓ Saved: metrics_operations.png")
 
     # 5) 에너지 효율성 (bits/Joule)
-    eff = [metrics_by_model[k]["energy_efficiency_bits_per_joule"] for k in labels]
+    eff = [metrics_by_model[k]["energy_efficiency_bits_per_joule"] for k in model_names]
     plt.figure(figsize=(8,6))
-    plt.bar(labels, eff, color='gold')
+    plt.bar(model_names, eff, color='gold')
     plt.title('Energy Efficiency')
     plt.ylabel('bits/Joule (higher is better)')
     plt.grid(True, alpha=0.3)
@@ -948,9 +1001,9 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     print("  ✓ Saved: metrics_energy_efficiency.png")
 
     # 6) SQNR
-    sqnr = [metrics_by_model[k]["avg_sqnr_db"] for k in labels]
+    sqnr = [metrics_by_model[k]["avg_sqnr_db"] for k in model_names]
     plt.figure(figsize=(8,6))
-    plt.bar(labels, sqnr, color='orchid')
+    plt.bar(model_names, sqnr, color='orchid')
     plt.title('Average SQNR (Signal to Quantization Noise Ratio)')
     plt.ylabel('SQNR (dB)')
     plt.grid(True, alpha=0.3)
@@ -961,9 +1014,9 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     print("  ✓ Saved: metrics_sqnr.png")
 
     # 7) Throughput
-    throughput = [metrics_by_model[k]["throughput_bps"] for k in labels]
+    throughput = [metrics_by_model[k]["throughput_bps"] for k in model_names]
     plt.figure(figsize=(8,6))
-    plt.bar(labels, throughput, color='cyan')
+    plt.bar(model_names, throughput, color='cyan')
     plt.title('Throughput')
     plt.ylabel('bps (bits per second)')
     plt.grid(True, alpha=0.3)
@@ -973,79 +1026,79 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     plt.close()
     print("  ✓ Saved: metrics_throughput.png")
 
-    # 8) SNR별 BER 성능
-    # 모든 모델의 SNR별 BER를 한 그래프에
-    snr_keys = sorted(metrics_by_model[labels[0]]["ber_by_snr"].keys())
-    plt.figure(figsize=(10,6))
-    for model_name in labels:
-        ber_values = [metrics_by_model[model_name]["ber_by_snr"][snr_key] for snr_key in snr_keys]
-        snr_labels = [snr_key.replace("snr_", "").replace("db", " dB") for snr_key in snr_keys]
-        plt.plot(snr_labels, ber_values, marker='o', label=model_name, linewidth=2)
-
-    plt.title('BER Performance vs SNR')
-    plt.xlabel('SNR')
-    plt.ylabel('BER (lower is better)')
-    plt.yscale('log')  # Log scale for BER
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "metrics_ber_vs_snr.png"), dpi=120, bbox_inches='tight')
-    plt.close()
-    print("  ✓ Saved: metrics_ber_vs_snr.png")
-
-    # 9) 트래픽별 BER
-    traffic_types = sorted(metrics_by_model[labels[0]]["ber_by_traffic"].keys())
+    # 8) 트래픽별 BER (선 그래프)
+    traffic_types = sorted(metrics_by_model[model_names[0]]["ber_by_traffic"].keys())
     x_pos = np.arange(len(traffic_types))
-    width = 0.25
 
     plt.figure(figsize=(10,6))
-    for i, model_name in enumerate(labels):
+    for model_name in model_names:
         ber_values = [metrics_by_model[model_name]["ber_by_traffic"][tt] for tt in traffic_types]
-        plt.bar(x_pos + i*width, ber_values, width, label=model_name, alpha=0.8)
+        color = colors.get(model_name, 'gray')
+        plt.plot(x_pos, ber_values, marker='o', label=model_name, linewidth=2, color=color)
 
     plt.title('BER by Traffic Type')
     plt.xlabel('Traffic Type')
     plt.ylabel('BER (lower is better)')
-    plt.xticks(x_pos + width, traffic_types)
+    plt.xticks(x_pos, traffic_types)
+    plt.yscale('log')  # Log scale for BER
     plt.legend()
-    plt.grid(True, alpha=0.3, axis='y')
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_ber_by_traffic.png"), dpi=120, bbox_inches='tight')
     plt.close()
     print("  ✓ Saved: metrics_ber_by_traffic.png")
 
-    # 10) 트래픽별 디지털 에너지
+    # 9) 트래픽별 디지털 에너지 (선 그래프)
     plt.figure(figsize=(10,6))
-    for i, model_name in enumerate(labels):
+    for model_name in model_names:
         energy_values = [metrics_by_model[model_name]["energy_by_traffic"][tt] for tt in traffic_types]
-        plt.bar(x_pos + i*width, energy_values, width, label=model_name, alpha=0.8)
+        color = colors.get(model_name, 'gray')
+        plt.plot(x_pos, energy_values, marker='o', label=model_name, linewidth=2, color=color)
 
     plt.title('Digital Energy by Traffic Type')
     plt.xlabel('Traffic Type')
     plt.ylabel('Energy per packet (pJ)')
-    plt.xticks(x_pos + width, traffic_types)
+    plt.xticks(x_pos, traffic_types)
     plt.legend()
-    plt.grid(True, alpha=0.3, axis='y')
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(os.path.join(outdir, "metrics_energy_by_traffic.png"), dpi=120, bbox_inches='tight')
     plt.close()
     print("  ✓ Saved: metrics_energy_by_traffic.png")
 
-    # 11) ADC 비트 사용 비율 (5비트 vs 10비트)
-    bit5_ratios = [metrics_by_model[k]["adc_bit_5_ratio"] for k in labels]
-    bit10_ratios = [metrics_by_model[k]["adc_bit_10_ratio"] for k in labels]
+    # 10) 트래픽별 Latency (선 그래프)
+    plt.figure(figsize=(10,6))
+    for model_name in model_names:
+        latency_values = [metrics_by_model[model_name]["latency_by_traffic"][tt] for tt in traffic_types]
+        color = colors.get(model_name, 'gray')
+        plt.plot(x_pos, latency_values, marker='o', label=model_name, linewidth=2, color=color)
 
-    x_pos = np.arange(len(labels))
+    plt.title('Latency by Traffic Type')
+    plt.xlabel('Traffic Type')
+    plt.ylabel('Latency (ms)')
+    plt.xticks(x_pos, traffic_types)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(outdir, "metrics_latency_by_traffic.png"), dpi=120, bbox_inches='tight')
+    plt.close()
+    print("  ✓ Saved: metrics_latency_by_traffic.png")
+
+    # 11) ADC 비트 사용 비율 (5비트 vs 10비트) - Bar chart 유지
+    bit5_ratios = [metrics_by_model[k]["adc_bit_5_ratio"] for k in model_names]
+    bit10_ratios = [metrics_by_model[k]["adc_bit_10_ratio"] for k in model_names]
+
+    x_pos_models = np.arange(len(model_names))
     width = 0.35
 
     plt.figure(figsize=(10,6))
-    plt.bar(x_pos - width/2, bit5_ratios, width, label='5-bit usage', color='lightblue')
-    plt.bar(x_pos + width/2, bit10_ratios, width, label='10-bit usage', color='lightcoral')
+    plt.bar(x_pos_models - width/2, bit5_ratios, width, label='5-bit usage', color='lightblue')
+    plt.bar(x_pos_models + width/2, bit10_ratios, width, label='10-bit usage', color='lightcoral')
 
     plt.title('ADC Bit Usage Ratio')
     plt.xlabel('Model')
     plt.ylabel('Usage Percentage (%)')
-    plt.xticks(x_pos, labels, rotation=15)
+    plt.xticks(x_pos_models, model_names, rotation=15)
     plt.legend()
     plt.grid(True, alpha=0.3, axis='y')
     plt.ylim(0, 105)
