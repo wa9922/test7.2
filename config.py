@@ -12,9 +12,48 @@ LTF_BITS = [1,1,0,1,1,0,0,1,0,1,1,1,0,0,0,1]*4
 SIGNAL_FIELD_BITS = 48
 PAYLOAD_BITS      = 1024
 
-# --- BPSK ---
+# --- Constellation 정의 (BPSK, QPSK, 16-QAM) ---
 # GNURadio 호환: Complex는 float32 실수부 + float32 허수부 = 64비트
+
+# BPSK: 1 bit/symbol, 2 symbols
 BPSK_CONSTELLATION = {0: np.complex64(-1.0+0j), 1: np.complex64(+1.0+0j)}
+
+# QPSK: 2 bits/symbol, 4 symbols (Gray coding)
+# (00, 01, 11, 10) → normalized to unit energy
+QPSK_CONSTELLATION = {
+    0b00: np.complex64((-1-1j)/np.sqrt(2)),  # -45°
+    0b01: np.complex64((-1+1j)/np.sqrt(2)),  # 135°
+    0b11: np.complex64((+1+1j)/np.sqrt(2)),  # 45°
+    0b10: np.complex64((+1-1j)/np.sqrt(2)),  # -135°
+}
+
+# 16-QAM: 4 bits/symbol, 16 symbols (Gray coding)
+# Normalized to average energy = 1
+QAM16_CONSTELLATION = {
+    0b0000: np.complex64((-3-3j)/np.sqrt(10)),
+    0b0001: np.complex64((-3-1j)/np.sqrt(10)),
+    0b0011: np.complex64((-3+3j)/np.sqrt(10)),
+    0b0010: np.complex64((-3+1j)/np.sqrt(10)),
+    0b0100: np.complex64((-1-3j)/np.sqrt(10)),
+    0b0101: np.complex64((-1-1j)/np.sqrt(10)),
+    0b0111: np.complex64((-1+3j)/np.sqrt(10)),
+    0b0110: np.complex64((-1+1j)/np.sqrt(10)),
+    0b1100: np.complex64((+3-3j)/np.sqrt(10)),
+    0b1101: np.complex64((+3-1j)/np.sqrt(10)),
+    0b1111: np.complex64((+3+3j)/np.sqrt(10)),
+    0b1110: np.complex64((+3+1j)/np.sqrt(10)),
+    0b1000: np.complex64((+1-3j)/np.sqrt(10)),
+    0b1001: np.complex64((+1-1j)/np.sqrt(10)),
+    0b1011: np.complex64((+1+3j)/np.sqrt(10)),
+    0b1010: np.complex64((+1+1j)/np.sqrt(10)),
+}
+
+# MCS별 bits per symbol
+MCS_BITS_PER_SYMBOL = {
+    "BPSK": 1,
+    "QPSK": 2,
+    "16QAM": 4,
+}
 
 # --- Gain 레벨 (FSM 제거됨, 참고용 설정만 남음) ---
 # 참고: 실제로는 모든 모델이 AGC를 사용하여 gain을 자동 조절합니다.
@@ -82,6 +121,21 @@ NOISE_POWER    = 0.1
 # SNR은 주어진 채널 환경 (트래픽 타입과 무관)
 # 시스템은 SNR에 맞게 MCS를 선택하고, 수신 신호에 따라 디지털 비트 선택
 CHANNEL_SNR_RANGE = [5, 10, 15, 20, 25]  # 다양한 채널 환경 (dB)
+
+# --- MCS (Modulation and Coding Scheme) 선택 (SNR 기반) ---
+# SNR 임계값에 따라 변조 방식 자동 선택
+MCS_SNR_THRESHOLDS = {
+    "BPSK": (0, 10),      # SNR < 10 dB → BPSK (1 bit/symbol, 가장 강건)
+    "QPSK": (10, 17),     # 10 ≤ SNR < 17 dB → QPSK (2 bits/symbol)
+    "16QAM": (17, 100),   # SNR ≥ 17 dB → 16-QAM (4 bits/symbol, 높은 처리율)
+}
+
+def select_mcs_from_snr(snr_db: float) -> str:
+    """SNR 값에 따라 적절한 MCS 선택"""
+    for mcs, (min_snr, max_snr) in MCS_SNR_THRESHOLDS.items():
+        if min_snr <= snr_db < max_snr:
+            return mcs
+    return "BPSK"  # 기본값
 
 # --- 디지털 더미 연산(비트 기반) 스케일 상수 ---
 # adds_per_sample ≈ K_ADD * bits

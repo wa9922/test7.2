@@ -39,7 +39,7 @@ from collections import defaultdict
 from carrier_sensing import CarrierSensingTop
 from signal_generator import SignalGenerator
 from ber_calculator import BERCalculator
-from config import SAMPLING_RATE, NOISE_POWER, DEBUG_MODE, PLOT_RESULTS, TRAFFIC_ADC_RESOLUTION, DIGITAL_TRUNCATION_BITS
+from config import SAMPLING_RATE, NOISE_POWER, DEBUG_MODE, PLOT_RESULTS, TRAFFIC_ADC_RESOLUTION, DIGITAL_TRUNCATION_BITS, select_mcs_from_snr
 from power_measurement import DigitalComputationMeasurement, AnalogPowerMeasurement
 from adc import ADC5bit, ADC10bit
 from rf_paths import UnifiedRFPath
@@ -302,6 +302,9 @@ class AgcSystem:
                 quantized_signal = self.apply_adc_quantization(amplified_signal)
 
         # ========== 7. BER 계산 (STF 구간) ==========
+        # MCS 정보 추출 (packet_info에 포함됨)
+        packet_mcs = packet_info.get('mcs', 'BPSK')
+
         stf_quantized = quantized_signal[0:stf_end_idx]
         ber_result = self.ber_calculator.process_stf_block(
             stf_quantized, noise_power,
@@ -347,6 +350,7 @@ class AgcSystem:
         packet_result = {
             "packet_info": packet_info,
             "traffic_type": self.current_traffic_type,
+            "mcs": packet_mcs,  # MCS 정보 추가
             "channel_snr_db": channel_snr_db,
             "final_gain_db": self.current_gain_db,
             "final_adc_resolution": self.current_adc_resolution,
@@ -491,10 +495,14 @@ class AgcSystem:
 
                 for _ in range(packets_per_scenario):
                     current_time = self.time_series_collector.get_current_time()
-                    print(f"\n--- Time: {current_time:.1f}ms | Packet {packet_counter + 1}: "
-                          f"{traffic_type.upper()} at SNR {snr_db} dB (channel) ---")
 
-                    packet_info = self.signal_generator.create_complete_packet(traffic_type)
+                    # SNR 기반 MCS 선택 (교수님 피드백: SNR에 맞게 MCS 변경)
+                    mcs = select_mcs_from_snr(snr_db)
+
+                    print(f"\n--- Time: {current_time:.1f}ms | Packet {packet_counter + 1}: "
+                          f"{traffic_type.upper()} at SNR {snr_db} dB → MCS: {mcs} ---")
+
+                    packet_info = self.signal_generator.create_complete_packet(traffic_type, mcs=mcs)
                     result = self.process_packet(packet_info, snr_db)
                     scenario_results.append(result)
 

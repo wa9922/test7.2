@@ -107,13 +107,14 @@ class BERCalculator:
             return 0.0
         return self.total_bit_errors / self.total_bits_processed
     
-    def calculate_theoretical_ber_with_quantization(self, snr_db: float, adc_bits: int) -> float:
+    def calculate_theoretical_ber_with_quantization(self, snr_db: float, adc_bits: int, mcs: str = "BPSK") -> float:
         """
-        양자화 에러를 고려한 이론적 BPSK BER 계산
+        양자화 에러를 고려한 이론적 BER 계산 (MCS별)
 
         Args:
             snr_db: 채널 SNR (dB)
             adc_bits: ADC/디지털 비트 수
+            mcs: 변조 방식 ("BPSK", "QPSK", "16QAM")
 
         Returns:
             이론적 BER
@@ -131,10 +132,21 @@ class BERCalculator:
         # Effective SNR: 1/SNR_eff = 1/SNR_channel + 1/SQNR
         snr_eff_linear = 1.0 / (1.0/snr_linear + 1.0/sqnr_linear)
 
-        # BPSK theoretical BER: BER = 0.5 * erfc(sqrt(SNR))
-        ber = 0.5 * erfc(np.sqrt(snr_eff_linear))
+        # MCS별 이론적 BER 계산
+        if mcs == "BPSK":
+            # BPSK: BER = 0.5 * erfc(sqrt(SNR))
+            ber = 0.5 * erfc(np.sqrt(snr_eff_linear))
+        elif mcs == "QPSK":
+            # QPSK (Gray coding): BER ≈ 0.5 * erfc(sqrt(SNR))
+            ber = 0.5 * erfc(np.sqrt(snr_eff_linear))
+        elif mcs == "16QAM":
+            # 16-QAM: BER ≈ (3/8) * erfc(sqrt(SNR/10))
+            ber = (3/8) * erfc(np.sqrt(snr_eff_linear / 10))
+        else:
+            # 기본값: BPSK
+            ber = 0.5 * erfc(np.sqrt(snr_eff_linear))
 
-        # Clip to reasonable range (allow very low BER for high SNR)
+        # Clip to reasonable range
         ber = np.clip(ber, 1e-12, 0.5)
 
         return ber
