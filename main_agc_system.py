@@ -269,14 +269,15 @@ class AgcSystem:
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 10) -> Dict:
         """
-        패킷 처리 (교수님 피드백 반영: FSM 기반 AGC, Preamble power 측정)
+        패킷 처리 (교수님 피드백 반영: FSM 기반 AGC, STF에서만 gain 결정)
 
         AGC FSM 동작:
         1. IDLE → DETECT: Carrier sensing으로 패킷 감지
-        2. DETECT → COARSE_AGC: STF power 측정 → coarse gain adjustment
-        3. COARSE_AGC → FINE_AGC: LTF power 측정 → fine gain adjustment
-        4. FINE_AGC → TRACK: Gain 고정, Signal Field + Payload 수신
-        5. TRACK → IDLE: 패킷 처리 완료
+        2. DETECT → COARSE_AGC: STF power 측정 → gain 결정 (STF에서만 AGC 수행)
+        3. COARSE_AGC → TRACK: Gain 고정, 나머지 패킷 수신 (LTF/Signal Field/Payload)
+        4. TRACK → IDLE: 패킷 처리 완료
+
+        주의: Gain은 STF에서만 결정되고 그때 결정되어 끝까지 유지됨 (중간에 바뀌지 않음)
         """
         self.current_traffic_type = packet_info['traffic_type']
 
@@ -376,36 +377,22 @@ class AgcSystem:
                 print(f"    STF Power: {self.stf_power_db:.2f} dBFS, Target: {AGC_TARGET_POWER_DB:.2f} dBFS")
                 print(f"    Coarse Gain Adjustment: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
 
-        # ========== 4. AGC FSM: COARSE_AGC → FINE_AGC ==========
-        # LTF 구간 처리 (fine gain adjustment)
-        self.agc_state = AgcState.FINE_AGC
-
-        if self.enable_gain_feedback:
-            # LTF 신호 추출 (업데이트된 gain으로 증폭)
-            ltf_signal = noisy_signal[ltf_start_idx:ltf_end_idx]
-            ltf_amplified = self.process_rf_only(ltf_signal)
-
-            # LTF power 측정 (dBFS)
-            self.ltf_power_db = self.measure_signal_power_db(ltf_amplified)
-
-            # Fine gain adjustment
-            old_gain = self.current_gain_db
-            self.current_gain_db = self.adjust_gain_based_on_power(
-                self.ltf_power_db, AGC_TARGET_POWER_DB, AGC_FINE_STEP_DB
-            )
-
-            if DEBUG_MODE:
-                print(f"  [FSM] {AgcState.COARSE_AGC.value} → {AgcState.FINE_AGC.value}")
-                print(f"    LTF Power: {self.ltf_power_db:.2f} dBFS, Target: {AGC_TARGET_POWER_DB:.2f} dBFS")
-                print(f"    Fine Gain Adjustment: {old_gain:.1f} → {self.current_gain_db:.1f} dB")
-
-        # ========== 5. AGC FSM: FINE_AGC → TRACK ==========
-        # Gain 고정, 전체 패킷을 최종 gain으로 증폭
+        # ========== 4. AGC FSM: COARSE_AGC → TRACK ==========
+        # 교수님 피드백: STF에서만 gain 결정, LTF는 gain 조정 안 함
+        # LTF는 채널 추정 용도로만 사용 (gain은 STF에서 결정된 값 유지)
         self.agc_state = AgcState.TRACK
 
+        # LTF power 측정만 수행 (참고용, gain 조정은 안 함)
+        if self.enable_gain_feedback:
+            ltf_signal = noisy_signal[ltf_start_idx:ltf_end_idx]
+            ltf_amplified = self.process_rf_only(ltf_signal)
+            self.ltf_power_db = self.measure_signal_power_db(ltf_amplified)
+
         if DEBUG_MODE:
-            print(f"  [FSM] {AgcState.FINE_AGC.value} → {AgcState.TRACK.value}")
-            print(f"    Final Gain: {self.current_gain_db:.1f} dB (locked)")
+            print(f"  [FSM] {AgcState.COARSE_AGC.value} → {AgcState.TRACK.value}")
+            print(f"    Gain Locked at STF: {self.current_gain_db:.1f} dB (no adjustment in LTF)")
+            if self.ltf_power_db:
+                print(f"    LTF Power (reference only): {self.ltf_power_db:.2f} dBFS")
 
         # ========== 6. 결정된 gain으로 전체 패킷을 한 번에 RF 증폭 ==========
         amplified_signal = self.process_rf_only(noisy_signal)

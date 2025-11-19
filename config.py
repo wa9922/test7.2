@@ -158,12 +158,12 @@ ADC_MAX_BITS             = 10      # 실제 ADC 고정 비트
 from enum import Enum
 
 class AgcState(Enum):
-    """AGC State Machine States"""
+    """AGC State Machine States (교수님 피드백: STF에서만 gain 결정)"""
     IDLE = "IDLE"              # 대기 상태 (패킷 없음)
     DETECT = "DETECT"          # 패킷 감지 (carrier sensing)
-    COARSE_AGC = "COARSE_AGC"  # STF 기반 coarse gain adjustment
-    FINE_AGC = "FINE_AGC"      # LTF 기반 fine gain adjustment
-    TRACK = "TRACK"            # Gain 고정, 패킷 수신 (Signal Field + Payload)
+    COARSE_AGC = "COARSE_AGC"  # STF 기반 gain adjustment (STF에서만 AGC 수행)
+    FINE_AGC = "FINE_AGC"      # Reserved (사용 안 함, STF에서만 gain 결정)
+    TRACK = "TRACK"            # Gain 고정, 패킷 수신 (LTF + Signal Field + Payload)
 
 # AGC gain adjustment parameters
 AGC_TARGET_POWER_DB = -10.0    # 목표 신호 전력 (dBFS)
