@@ -887,17 +887,29 @@ def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], out
     """3개 주요 메트릭 그래프: Energy, BER, Latency (SNR별 선 그래프)"""
     model_names = list(metrics_by_model.keys())
     colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
+    linestyles = {'Low-Power Fixed (5-bit)': '-', 'High-Perf Fixed (10-bit)': '--', 'Adaptive (Proposed)': '-'}
+    markers = {'Low-Power Fixed (5-bit)': 's', 'High-Perf Fixed (10-bit)': '^', 'Adaptive (Proposed)': 'o'}
 
-    # SNR 범위 추출
-    snr_keys = sorted(metrics_by_model[model_names[0]]["ber_by_snr"].keys())
+    # 모든 모델의 SNR 값을 합쳐서 전체 SNR 범위 추출
+    all_snr_keys = set()
+    for model_name in model_names:
+        all_snr_keys.update(metrics_by_model[model_name]["ber_by_snr"].keys())
+    snr_keys = sorted(all_snr_keys)
     snr_values = [int(k.replace("snr_", "").replace("db", "")) for k in snr_keys]
 
     # 1) Digital Energy vs SNR
     plt.figure(figsize=(10,6))
     for model_name in model_names:
-        energy_values = [metrics_by_model[model_name]["energy_by_snr"][snr_key] for snr_key in snr_keys]
-        color = colors.get(model_name, 'gray')
-        plt.plot(snr_values, energy_values, marker='o', label=model_name, linewidth=2, color=color)
+        energy_values = [metrics_by_model[model_name]["energy_by_snr"].get(snr_key, None) for snr_key in snr_keys]
+        # None 값 제거
+        valid_points = [(snr, energy) for snr, energy in zip(snr_values, energy_values) if energy is not None]
+        if valid_points:
+            x_vals, y_vals = zip(*valid_points)
+            color = colors.get(model_name, 'gray')
+            linestyle = linestyles.get(model_name, '-')
+            marker = markers.get(model_name, 'o')
+            plt.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
+                    color=color, linestyle=linestyle, markersize=8)
 
     plt.title('Digital Energy vs SNR')
     plt.xlabel('SNR (dB)')
@@ -912,9 +924,16 @@ def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], out
     # 2) BER vs SNR
     plt.figure(figsize=(10,6))
     for model_name in model_names:
-        ber_values = [metrics_by_model[model_name]["ber_by_snr"][snr_key] for snr_key in snr_keys]
-        color = colors.get(model_name, 'gray')
-        plt.plot(snr_values, ber_values, marker='o', label=model_name, linewidth=2, color=color)
+        ber_values = [metrics_by_model[model_name]["ber_by_snr"].get(snr_key, None) for snr_key in snr_keys]
+        # None 값 제거
+        valid_points = [(snr, ber) for snr, ber in zip(snr_values, ber_values) if ber is not None]
+        if valid_points:
+            x_vals, y_vals = zip(*valid_points)
+            color = colors.get(model_name, 'gray')
+            linestyle = linestyles.get(model_name, '-')
+            marker = markers.get(model_name, 'o')
+            plt.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
+                    color=color, linestyle=linestyle, markersize=8)
 
     plt.title('BER vs SNR')
     plt.xlabel('SNR (dB)')
@@ -930,9 +949,16 @@ def plot_three_metrics_models(metrics_by_model: Dict[str, Dict[str, float]], out
     # 3) Latency vs SNR
     plt.figure(figsize=(10,6))
     for model_name in model_names:
-        latency_values = [metrics_by_model[model_name]["latency_by_snr"][snr_key] for snr_key in snr_keys]
-        color = colors.get(model_name, 'gray')
-        plt.plot(snr_values, latency_values, marker='o', label=model_name, linewidth=2, color=color)
+        latency_values = [metrics_by_model[model_name]["latency_by_snr"].get(snr_key, None) for snr_key in snr_keys]
+        # None 값 제거
+        valid_points = [(snr, latency) for snr, latency in zip(snr_values, latency_values) if latency is not None]
+        if valid_points:
+            x_vals, y_vals = zip(*valid_points)
+            color = colors.get(model_name, 'gray')
+            linestyle = linestyles.get(model_name, '-')
+            marker = markers.get(model_name, 'o')
+            plt.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
+                    color=color, linestyle=linestyle, markersize=8)
 
     plt.title('Latency vs SNR')
     plt.xlabel('SNR (dB)')
@@ -958,9 +984,14 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
     """
     model_names = list(metrics_by_model.keys())
     colors = {'Low-Power Fixed (5-bit)': 'blue', 'High-Perf Fixed (10-bit)': 'red', 'Adaptive (Proposed)': 'green'}
+    linestyles = {'Low-Power Fixed (5-bit)': '-', 'High-Perf Fixed (10-bit)': '--', 'Adaptive (Proposed)': '-'}
+    markers = {'Low-Power Fixed (5-bit)': 's', 'High-Perf Fixed (10-bit)': '^', 'Adaptive (Proposed)': 'o'}
 
-    # SNR 범위 추출
-    snr_keys = sorted(metrics_by_model[model_names[0]]["ber_by_snr"].keys())
+    # 모든 모델의 SNR 값을 합쳐서 전체 SNR 범위 추출
+    all_snr_keys = set()
+    for model_name in model_names:
+        all_snr_keys.update(metrics_by_model[model_name]["ber_by_snr"].keys())
+    snr_keys = sorted(all_snr_keys)
     snr_values = [int(k.replace("snr_", "").replace("db", "")) for k in snr_keys]
 
     # 4) Operations vs SNR (Additions, Multiplications)
@@ -968,9 +999,15 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
 
     # Additions
     for model_name in model_names:
-        add_values = [metrics_by_model[model_name]["operations_by_snr"][snr_key]["additions"] for snr_key in snr_keys]
-        color = colors.get(model_name, 'gray')
-        ax1.plot(snr_values, add_values, marker='o', label=model_name, linewidth=2, color=color)
+        add_values = [metrics_by_model[model_name]["operations_by_snr"].get(snr_key, {}).get("additions", None) for snr_key in snr_keys]
+        valid_points = [(snr, adds) for snr, adds in zip(snr_values, add_values) if adds is not None]
+        if valid_points:
+            x_vals, y_vals = zip(*valid_points)
+            color = colors.get(model_name, 'gray')
+            linestyle = linestyles.get(model_name, '-')
+            marker = markers.get(model_name, 'o')
+            ax1.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
+                    color=color, linestyle=linestyle, markersize=8)
 
     ax1.set_title('Additions vs SNR')
     ax1.set_xlabel('SNR (dB)')
@@ -980,9 +1017,15 @@ def plot_extended_metrics(metrics_by_model: Dict[str, Dict], outdir: str = "."):
 
     # Multiplications
     for model_name in model_names:
-        mult_values = [metrics_by_model[model_name]["operations_by_snr"][snr_key]["multiplications"] for snr_key in snr_keys]
-        color = colors.get(model_name, 'gray')
-        ax2.plot(snr_values, mult_values, marker='o', label=model_name, linewidth=2, color=color)
+        mult_values = [metrics_by_model[model_name]["operations_by_snr"].get(snr_key, {}).get("multiplications", None) for snr_key in snr_keys]
+        valid_points = [(snr, mults) for snr, mults in zip(snr_values, mult_values) if mults is not None]
+        if valid_points:
+            x_vals, y_vals = zip(*valid_points)
+            color = colors.get(model_name, 'gray')
+            linestyle = linestyles.get(model_name, '-')
+            marker = markers.get(model_name, 'o')
+            ax2.plot(x_vals, y_vals, marker=marker, label=model_name, linewidth=2.5,
+                    color=color, linestyle=linestyle, markersize=8)
 
     ax2.set_title('Multiplications vs SNR')
     ax2.set_xlabel('SNR (dB)')
