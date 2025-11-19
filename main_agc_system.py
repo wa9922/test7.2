@@ -304,12 +304,57 @@ class AgcSystem:
         ltf_end_idx = packet_info["signal_field_start_idx"]  # LTF는 preamble의 두 번째 부분
 
         # ========== 2. AGC FSM: IDLE → DETECT ==========
+        # Carrier sensing으로 패킷 존재 확인
         self.agc_state = AgcState.DETECT
+
         if DEBUG_MODE:
             print(f"  [FSM] {AgcState.IDLE.value} → {AgcState.DETECT.value}")
 
+        # Carrier sensing: 초기 신호 샘플링 (STF 일부)
+        detection_window = min(stf_end_idx, 2560)  # STF 전체 또는 일부
+        initial_signal = noisy_signal[0:detection_window]
+
+        # 현재 gain으로 증폭 후 ADC 양자화
+        initial_amplified = self.process_rf_only(initial_signal)
+        initial_quantized = self.apply_adc_quantization(initial_amplified)
+
+        # Carrier sensing 실행 (energy, correlation, saturation)
+        cs_result = self.carrier_sensing.process_signal(initial_quantized)
+        cs_operations = self._calculate_cs_operations(len(initial_quantized))
+
+        # 감지 결과 확인
+        packet_detected = (
+            cs_result["detection_methods"].get("energy", False) or
+            cs_result["detection_methods"].get("correlation", False) or
+            cs_result["detection_methods"].get("saturation", False)
+        )
+
+        if DEBUG_MODE:
+            print(f"    Carrier Sensing Results:")
+            print(f"      Energy Detection: {cs_result['detection_methods'].get('energy', False)}")
+            print(f"      Correlation Detection: {cs_result['detection_methods'].get('correlation', False)}")
+            print(f"      Saturation Detection: {cs_result['detection_methods'].get('saturation', False)}")
+            print(f"      Packet Detected: {packet_detected}")
+
+        if not packet_detected:
+            # 패킷 감지 실패 → IDLE로 복귀
+            self.agc_state = AgcState.IDLE
+            if DEBUG_MODE:
+                print(f"  [FSM] {AgcState.DETECT.value} → {AgcState.IDLE.value} (no packet detected)")
+
+            # 감지 실패 결과 반환
+            return {
+                "packet_info": packet_info,
+                "traffic_type": self.current_traffic_type,
+                "channel_snr_db": channel_snr_db,
+                "packet_detected": False,
+                "carrier_sensing": cs_result,
+                "final_gain_db": self.current_gain_db,
+                "agc_fsm": {"final_state": AgcState.IDLE.value}
+            }
+
         # ========== 3. AGC FSM: DETECT → COARSE_AGC ==========
-        # STF 구간 처리 (coarse gain adjustment)
+        # 패킷 감지 성공 → STF 구간 처리 (coarse gain adjustment)
         self.agc_state = AgcState.COARSE_AGC
 
         if self.enable_gain_feedback:
@@ -442,6 +487,7 @@ class AgcSystem:
             "traffic_type": self.current_traffic_type,
             "mcs": packet_mcs,  # MCS 정보
             "channel_snr_db": channel_snr_db,
+            "packet_detected": True,  # 패킷 감지 성공
             "final_gain_db": self.current_gain_db,
             "final_adc_resolution": self.current_adc_resolution,
             "final_digital_bits": self.current_digital_bits,
@@ -453,7 +499,9 @@ class AgcSystem:
                 "average_power_mw": self.analog_power.get_average_power()
             },
             "digital_computation": self.digital_computation.get_operation_stats(),
-            # AGC FSM 정보 추가
+            # Carrier sensing 정보
+            "carrier_sensing": cs_result,
+            # AGC FSM 정보
             "agc_fsm": {
                 "final_state": self.agc_state.value,
                 "stf_power_db": self.stf_power_db,
