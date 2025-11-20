@@ -33,3 +33,6 @@ Thumbs.db
 venv/
 env/
 ENV/
+
+# Archived documentation
+archive_docs/
