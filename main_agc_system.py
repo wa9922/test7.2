@@ -3,7 +3,7 @@
 """
 메인 AGC(Automatic Gain Control) 시스템 시뮬레이션
 
-교수님 피드백 반영 (Unified Analog Architecture):
+ 반영 (Unified Analog Architecture):
 - 아날로그: 항상 동일 (UnifiedRFPath, ADC 10-bit 고정)
 - 디지털: Truncation으로 5비트 또는 10비트 선택
 - 전력 비교는 디지털 연산량만 차이 (아날로그 전력 동일)
@@ -67,7 +67,7 @@ class AgcSystem:
 
     def __init__(self, initial_digital_bits: int = 10, use_correlation_detection: bool = True, enable_gain_feedback: bool = True):
         """
-        AGC 시스템 초기화 (교수님 피드백 반영: Unified Analog, FSM 제거)
+        AGC 시스템 초기화 (Unified Analog, FSM 제거)
 
         Args:
             initial_digital_bits: 디지털 처리 시작 비트 수 (5 또는 10)
@@ -81,7 +81,7 @@ class AgcSystem:
         self.use_correlation_detection = use_correlation_detection
         self.enable_gain_feedback = enable_gain_feedback  # Gain feedback 제어
 
-        # AGC State Machine (교수님 피드백 반영)
+        # AGC State Machine 
         self.agc_state = AgcState.IDLE
         self.current_gain_db: float = 30.0  # 초기 gain (moderate)
 
@@ -92,7 +92,7 @@ class AgcSystem:
         self.signal_generator = SignalGenerator()
         self.ber_calculator = BERCalculator()
 
-        # 교수님 피드백 반영: 아날로그 단일화
+        # 아날로그 단일화
         # ADC는 항상 10비트로 동작
         self.adc = ADC10bit(vref=1.0)  # Single 10-bit ADC (항상 고정)
         self.current_adc_resolution = 10  # ADC 하드웨어는 항상 10비트
@@ -164,7 +164,7 @@ class AgcSystem:
 
     def apply_adc_quantization(self, signal: np.ndarray) -> np.ndarray:
         """
-        ADC 양자화 + 디지털 truncation (교수님 피드백 반영)
+        ADC 양자화 + 디지털 truncation 
 
         1단계: 항상 10비트 ADC로 양자화
         2단계: 디지털 단에서 self.current_digital_bits로 truncate
@@ -194,7 +194,7 @@ class AgcSystem:
 
     def update_adc_resolution_for_traffic(self, traffic_type: str) -> None:
         """
-        트래픽 타입에 따라 디지털 처리 비트 수 업데이트 (교수님 피드백 반영)
+        트래픽 타입에 따라 디지털 처리 비트 수 업데이트 
 
         ADC 하드웨어는 항상 10비트, 디지털 truncation만 변경
         """
@@ -272,7 +272,7 @@ class AgcSystem:
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 10) -> Dict:
         """
-        패킷 처리 (교수님 피드백 반영: FSM 기반 AGC, STF에서만 gain 결정)
+        패킷 처리 (FSM 기반 AGC, STF에서만 gain 결정)
 
         AGC FSM 동작:
         1. IDLE → DETECT: Carrier sensing으로 패킷 감지
@@ -385,7 +385,7 @@ class AgcSystem:
                 print(f"    RF Path Gain: LNA={self.rf_path.get_lna_gain():.1f} dB + VGA={self.rf_path.get_vga_gain():.1f} dB = {self.rf_path.get_total_gain():.1f} dB")
 
         # ========== 4. AGC FSM: COARSE_AGC → TRACK ==========
-        # 교수님 피드백: STF에서만 gain 결정, LTF는 gain 조정 안 함
+        # STF에서만 gain 결정, LTF는 gain 조정 안 함
         # LTF는 채널 추정 용도로만 사용 (gain은 STF에서 결정된 값 유지)
         self.agc_state = AgcState.TRACK
 
@@ -557,7 +557,7 @@ class AgcSystem:
                                    cs_operations: Optional[Dict] = None,
                                    ber_operations: Optional[Dict] = None) -> None:
         """
-        전력 측정 업데이트 (교수님 피드백 반영, FSM 제거)
+        전력 측정 업데이트 ( 반영, FSM 제거)
 
         - 아날로그: 항상 동일 전력, 실제 신호 시간에만 비례
         - 디지털: current_digital_bits에 따라 연산량 변경, 처리 시간은 latency에만 반영
@@ -597,7 +597,7 @@ class AgcSystem:
                        snr_range_db: List[float] = None,  # Deprecated, uses TRAFFIC_SNR_RANGE
                        packets_per_scenario: int = 20) -> Dict:
         """
-        AGC 시스템 시뮬레이션 실행 (교수님 피드백 반영: SNR은 주어진 채널 환경)
+        AGC 시스템 시뮬레이션 실행 (SNR은 주어진 채널 환경)
 
         Args:
             traffic_types: 시뮬레이션할 트래픽 타입 리스트
@@ -634,7 +634,7 @@ class AgcSystem:
                 for _ in range(packets_per_scenario):
                     current_time = self.time_series_collector.get_current_time()
 
-                    # SNR 기반 MCS 선택 (교수님 피드백: SNR에 맞게 MCS 변경)
+                    # SNR 기반 MCS 선택 (SNR에 맞게 MCS 변경)
                     mcs = select_mcs_from_snr(snr_db)
 
                     print(f"\n--- Time: {current_time:.1f}ms | Packet {packet_counter + 1}: "

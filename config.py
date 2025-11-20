@@ -79,7 +79,7 @@ DIGITAL_TRUNCATION_BITS = {
     "highperformancesignal": 10,     # 고성능 신호: 10비트
 }
 
-# --- Signal Field 매핑 (교수님 피드백: 3가지만, 중복 제거) ---
+# --- Signal Field 매핑 (3가지만, 중복 제거) ---
 TRAFFIC_INDICATION_MAPPING = {
     "00": "wake_up",
     "01": "lowpowersignal",
@@ -117,7 +117,7 @@ BER_UPDATE_INTERVAL = 100
 DEFAULT_SNR_DB = 10
 NOISE_POWER    = 0.1
 
-# --- 채널 SNR 범위 (교수님 피드백 반영) ---
+# --- 채널 SNR 범위  ---
 # SNR은 주어진 채널 환경 (트래픽 타입과 무관)
 # 시스템은 SNR에 맞게 MCS를 선택하고, 수신 신호에 따라 디지털 비트 선택
 CHANNEL_SNR_RANGE = [5, 10, 15, 20, 25]  # 다양한 채널 환경 (dB)
@@ -153,12 +153,12 @@ PLOT_RESULTS = True
 UNIFIED_ANALOG_ALWAYS_ON = True    # 항상 RX on(동일 전력)
 ADC_MAX_BITS             = 10      # 실제 ADC 고정 비트
 
-# --- AGC State Machine (교수님 피드백 반영) ---
+# --- AGC State Machine  ---
 # Preamble power 측정 기반 gain control을 위한 FSM states
 from enum import Enum
 
 class AgcState(Enum):
-    """AGC State Machine States (교수님 피드백: STF에서만 gain 결정)"""
+    """AGC State Machine States (STF에서만 gain 결정)"""
     IDLE = "IDLE"              # 대기 상태 (패킷 없음)
     DETECT = "DETECT"          # 패킷 감지 (carrier sensing)
     COARSE_AGC = "COARSE_AGC"  # STF 기반 gain adjustment (STF에서만 AGC 수행)

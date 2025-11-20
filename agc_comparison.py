@@ -224,7 +224,7 @@ def run_comparison_simulation(num_packets: int = 20, snr_values: List[float] = N
 
     print(f"\nRunning {num_iterations} iterations...")
 
-    # 트래픽 타입 (교수님 피드백 반영: 3가지만)
+    # 트래픽 타입 (3가지만)
     traffic_types = ['lowpowersignal', 'highperformancesignal']
 
     # 트래픽별 SNR 범위 출력

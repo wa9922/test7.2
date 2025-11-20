@@ -17,7 +17,7 @@ This project is a **Python-based simulation framework for Automatic Gain Control
 ### Key Objective
 Demonstrate that an adaptive AGC system can achieve a better balance between energy consumption and signal quality (BER) compared to fixed-mode approaches, by dynamically selecting digital truncation bits and RF gain based on detected traffic type.
 
-### 교수님 피드백 반영 사항 (Professor's Feedback)
+### System Requirements
 1. **아날로그 단일화 (Unified Analog)**: 아날로그 부분은 항상 동일 (UnifiedRFPath, ADC 10-bit 고정)
 2. **디지털 Truncation**: ADC는 항상 10비트로 동작, 디지털 단에서 5비트 또는 10비트로 truncate
 3. **전력 비교**: 디지털 연산량만 차이 (아날로그 전력 동일)
@@ -233,7 +233,7 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 - `ADC5bit`: 5-bit ADC (참고용, 실제로는 사용 안 함)
 - `ADC10bit`: 10-bit ADC (항상 사용, 1024 levels, range: -512 to 511)
 
-**Digital Truncation Process** (교수님 피드백 반영):
+**Digital Truncation Process** :
 1. ADC는 항상 10비트로 양자화
 2. 디지털 단에서 `truncate_to_bits(signal, 5)` 또는 `truncate_to_bits(signal, 10)` 호출
 3. 5비트 truncation: 상위 5비트만 사용 (32 levels)
@@ -251,7 +251,7 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
 - `lpf()`: Low-Pass Filter (1st-order IIR)
 
 **Key Classes**:
-- `UnifiedRFPath`: 통일된 RF 프론트엔드 (교수님 피드백 반영)
+- `UnifiedRFPath`: 통일된 RF 프론트엔드 
   - Chain: LNA(20dB 고정) → Mixer → VGA(가변 0-30dB) → LPF
   - 전력 소비 항상 동일
   - Gain만 피드백으로 조절 (총 gain = LNA 20dB + VGA 0-30dB = 20-50dB)
@@ -270,7 +270,7 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
   - `get_energy_consumption()`: Calculate energy for duration (mJ = power × time)
 
 - `MAX2829PowerModel`: High-performance receiver IC model (항상 사용)
-  - RX active: ~392 mW (교수님 피드백: 아날로그는 항상 동일)
+  - RX active: ~392 mW (Note: 아날로그는 항상 동일)
 
 - `MAX2830PowerModel`: Low-power receiver IC model (참고용, 사용 안 함)
 
@@ -327,7 +327,7 @@ Preamble (STF + LTF) → Signal Field (48 bits) → Payload (1024 bits)
   - LOW_GAIN: 15 dB (저전력 모델)
   - HIGH_GAIN: 40 dB (고성능 모델)
 
-- **Digital Truncation Bits by Traffic Type** (교수님 피드백 반영):
+- **Digital Truncation Bits by Traffic Type** :
   - wake_up: 5 bits
   - lowpowersignal: 5 bits
   - highperformancesignal: 10 bits
@@ -540,7 +540,7 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
        - Decode traffic type from signal field bits
        - (Adaptive mode) Update digital bits based on decoded traffic
        - Reprocess block with new digital bits
-   - **Gain Feedback** (교수님 피드백: 순수 피드백 AGC):
+   - **Gain Feedback** (Note: 순수 피드백 AGC):
      - Measure peak in block
      - If peak > 0.90: decrease gain by 1 dB
      - If peak < 0.25: increase gain by 1 dB
@@ -584,7 +584,7 @@ result = agc_system.process_packet(packet_info, channel_snr_db=10)
 
 ### Architectural Patterns
 
-1. **Feedback Control Pattern** (교수님 피드백 반영)
+1. **Feedback Control Pattern** 
    - 순수 피드백 기반 AGC (FSM 제거)
    - 신호 peak 측정 → gain 자동 조절 (10-50 dB 연속)
    - 실제 AGC 시스템과 동일한 동작
@@ -855,7 +855,7 @@ N = number of bits (5 or 10)
 
 ---
 
-## 12. 교수님 피드백 상세 반영 내역 (Professor's Feedback Implementation Details)
+## 12.  상세 반영 내역 (System Implementation Details)
 
 ### 1. 아날로그 단일화 (Unified Analog Architecture)
 
@@ -864,7 +864,7 @@ N = number of bits (5 or 10)
 - Two power models: MAX2829 (high), MAX2830 (low)
 - Power consumption depends on path selection
 
-**After** (교수님 피드백 반영):
+**After** :
 - Single RF path: UnifiedRFPath
 - Single power model: MAX2829 only
 - Power consumption always identical
@@ -882,7 +882,7 @@ self.rf_path = UnifiedRFPath(lna_gain=20, vga_gain=20, lpf_alpha=0.2)
 - Multiple ADC classes: ADC3bit, ADC5bit, ADC10bit
 - ADC resolution changes based on traffic type
 
-**After** (교수님 피드백 반영):
+**After** :
 - Single ADC: ADC10bit only (항상 10비트)
 - Digital truncation: 5-bit or 10-bit in digital domain
 
@@ -903,7 +903,7 @@ if self.current_digital_bits < 10:
 - Fixed gain per state
 - State transitions based on carrier sensing + signal field
 
-**After** (교수님 피드백 반영):
+**After** :
 - No FSM, direct gain variable
 - Continuous gain adjustment (10-50 dB)
 - Peak-based feedback loop
@@ -951,7 +951,7 @@ class FixedHighPerformanceAGC(AgcSystem):
 - 4 types: wake_up, sensor, voice, video
 - Complex mapping to states
 
-**After** (교수님 피드백 반영):
+**After** :
 - 3 types: wake_up, lowpowersignal, highperformancesignal
 - Simple binary choice: 5-bit or 10-bit
 
@@ -976,7 +976,7 @@ DIGITAL_TRUNCATION_BITS = {
 - Analog power differs between models
 - Difficult to isolate digital energy impact
 
-**After** (교수님 피드백 반영):
+**After** :
 - Analog power identical for all models
 - Digital energy is the only variable
 - Clear comparison: Low-Power (5-bit) vs High-Perf (10-bit) vs Adaptive (5/10-bit)
@@ -1084,7 +1084,7 @@ result_hp = high_perf.process_packet(packet, channel_snr_db=10)
 
 1. **Primary Innovation**: Adaptive AGC dynamically selects digital truncation bits based on detected traffic type, trading off power/performance on a per-packet basis vs fixed approaches
 
-2. **교수님 핵심 피드백**:
+2. **Core Requirements**:
    - 아날로그는 항상 동일 (UnifiedRFPath, 전력 동일)
    - 디지털만 변경 (5-bit vs 10-bit truncation)
    - FSM 제거, 순수 피드백 AGC
@@ -1136,4 +1136,4 @@ result_hp = high_perf.process_packet(packet, channel_snr_db=10)
 
 This is an academic/research project focusing on AGC design tradeoffs in multi-traffic wireless receivers. All components are self-contained Python implementations suitable for simulation and education purposes.
 
-**교수님 피드백 완전 반영 완료** (Professor's Feedback Fully Implemented)
+** 완전 반영 완료** (System Fully Implemented)

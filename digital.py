@@ -70,7 +70,7 @@ class DigitalAreaModel:
     
     def calculate_operations_for_bits(self, n_bits, num_samples=1):
         """
-        비트 수에 따른 연산량 계산 (교수님 피드백 반영)
+        비트 수에 따른 연산량 계산 
 
         Args:
             n_bits: 사용하는 비트 수 (5 또는 10)
