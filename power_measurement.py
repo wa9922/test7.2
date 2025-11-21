@@ -18,7 +18,7 @@ class DigitalComputationMeasurement:
         self.computation_history: List[Dict] = []
         self.current_adc_bits = ADC_MAX_BITS  # 실제 ADC 최대 비트 (예: 10)
 
-    def update_computation(self, fsm_state: str, block_size: int, adc_bits: int = None,
+    def update_computation(self, state_name: str, block_size: int, adc_bits: int = None,
                            carrier_sensing_ops: Dict = None, ber_ops: Dict = None,
                            is_proposed_method: bool = True) -> None:
         if adc_bits is not None:
@@ -42,10 +42,15 @@ class DigitalComputationMeasurement:
             total_mults += ber_ops.get('multiplications',0)
             total_adds  += ber_ops.get('additions',0)
 
-        # ====== 비트 종속 더미 연산(비교 핵심) ======
+        # ====== 비트 종속 디지털 연산 (RF 신호 처리) ======
+        # LNA/Mixer/VGA/LPF 디지털 처리 연산량
+        # - LNA 출력 처리: b-bit 연산
+        # - Mixer I/Q 복소 곱셈: O(b²) 연산
+        # - VGA gain 적용: O(b²) 곱셈
+        # - LPF 필터링: O(b) 덧셈
         b = self.current_adc_bits
-        total_adds  += int(K_ADD_PER_SAMPLE * block_size * b)
-        total_mults += int(K_MUL_PER_SAMPLE * block_size * (b**2))
+        total_adds  += int(K_ADD_PER_SAMPLE * block_size * b)      # 덧셈: O(b)
+        total_mults += int(K_MUL_PER_SAMPLE * block_size * (b**2))  # 곱셈: O(b²)
 
         # 제안 로직 추가 오버헤드(예: 탐지/상관 보조 연산)
         if is_proposed_method:
@@ -61,7 +66,7 @@ class DigitalComputationMeasurement:
         if len(self.computation_history) >= self.MAX_HISTORY_SIZE:
             self.computation_history.pop(0)
         self.computation_history.append({
-            'state': fsm_state,'block_size': block_size,'adc_bits': self.current_adc_bits,
+            'state': state_name,'block_size': block_size,'adc_bits': self.current_adc_bits,
             'mults': self.operation_counts['multiplications'],
             'adds':  self.operation_counts['additions'],
             'proposed_mults': self.operation_counts['proposed_multiplications'],
@@ -140,7 +145,7 @@ class AnalogPowerMeasurement:
         self.total_time_ms   += duration_ms
         self.power_history.append(p_mw)
 
-    def calculate_power(self, fsm_state: str, is_low_power: bool = False) -> float:
+    def calculate_power(self, state_name: str, is_low_power: bool = False) -> float:
         # 현재 모델에서는 상태/저전력 여부와 무관하게 항상 RX 전력 사용(단일 AGC)
         if UNIFIED_ANALOG_ALWAYS_ON:
             return self.model.get_power('RX')

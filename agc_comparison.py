@@ -12,7 +12,6 @@ from typing import Dict, List, Tuple
 import copy
 
 from main_agc_system import AgcSystem
-from agc_fsm import AgcFsm, AgcState
 from config import TRAFFIC_ADC_RESOLUTION
 from power_measurement import DigitalComputationMeasurement, AnalogPowerMeasurement
 
@@ -110,93 +109,81 @@ def calculate_average_results(accumulated_results: Dict, traffic_types: List[str
 
 
 class FixedLowPowerAGC(AgcSystem):
-    """저전력 고정 AGC - 항상 최소 전력 모드"""
+    """
+    저전력 고정 AGC - 디지털 비트는 5-bit 고정, gain은 자동 조절
+
+    특징:
+    - 아날로그: UnifiedRFPath (항상 동일)
+    - 디지털: 항상 5비트 truncation 사용 (고정)
+    - Gain: AGC 피드백 활성화 (자동 조절)
+    """
 
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
-        super().__init__(initial_adc_resolution=3, use_correlation_detection=False)
-        self.mode_name = "Low-Power Fixed AGC"
-        # 초기 상태를 저전력 모드로 설정 - 최적화된 이득
-        self.fsm.current_state = AgcState.LOW_GAIN_LP
-        self.fsm.current_gain_index = 0  # index for gain
-        self.current_gain_linear = 10**(10/20)  # 10 dB linear gain (from config)
+        # initial_digital_bits=5: 항상 5비트 사용
+        # enable_gain_feedback=True: AGC 활성화 (gain 자동 조절)
+        super().__init__(initial_digital_bits=5, use_correlation_detection=False, enable_gain_feedback=True)
+        self.mode_name = "Low-Power Fixed AGC (5-bit)"
+        self.current_digital_bits = 5  # 고정 5-bit
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        """패킷 처리 - 항상 저전력 모드 유지"""
-        # 매번 저전력 상태로 강제 설정 (config에서 10dB)
-        self.fsm.current_state = AgcState.LOW_GAIN_LP
-        self.fsm.current_gain_index = 0
-        self.current_gain_linear = 10**(10/20)  # 10 dB (from config)
+        """패킷 처리 - 디지털 비트만 고정 (5비트), gain은 AGC로 자동 조절"""
+        # 디지털 비트만 고정 (gain은 자동 조절됨)
+        self.current_digital_bits = 5
 
-        # ADC 해상도 고정 (3-bit) - 모든 트래픽에 대해
-        self.current_adc_resolution = 3
-
-        # FSM의 process_indication을 오버라이드하여 상태 변경 막기
-        original_process = self.fsm.process_indication
-        self.fsm.process_indication = lambda *args, **kwargs: False
-
-        # ADC 해상도 변경 막기
+        # 디지털 비트 변경 막기 (항상 5비트 유지)
         original_update_adc = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda traffic_type: None
 
         try:
-            # 부모 클래스의 처리 메서드 호출
+            # 부모 클래스의 처리 메서드 호출 (AGC 피드백 활성화됨)
             result = super().process_packet(packet_info, channel_snr_db)
         finally:
             # 원래 메서드 복구
-            self.fsm.process_indication = original_process
             self.update_adc_resolution_for_traffic = original_update_adc
 
-            # 상태가 변경되었을 수 있으므로 다시 강제 설정
-            self.fsm.current_state = AgcState.LOW_GAIN_LP
-            self.fsm.current_gain_index = 0
-            self.current_adc_resolution = 3
+            # 디지털 비트 고정 유지
+            self.current_digital_bits = 5
 
         return result
 
 
 class FixedHighPerformanceAGC(AgcSystem):
-    """고성능 고정 AGC - 항상 최고 성능 모드"""
+    """
+    고성능 고정 AGC - 디지털 비트는 10-bit 고정, gain은 자동 조절
+
+    특징:
+    - 아날로그: UnifiedRFPath (항상 동일)
+    - 디지털: 항상 10비트 전부 사용 (고정)
+    - Gain: AGC 피드백 활성화 (자동 조절)
+    """
 
     def __init__(self):
         # use_correlation_detection=False: 제안 기법 기능 비활성화
-        super().__init__(initial_adc_resolution=10, use_correlation_detection=False)
-        self.mode_name = "High-Performance Fixed AGC"
-        # 초기 상태를 고성능 모드로 설정 - 최적화된 이득
-        self.fsm.current_state = AgcState.HIGH_GAIN
-        self.fsm.current_gain_index = 3  # index for gain
-        self.current_gain_linear = 10**(40/20)  # 40 dB linear gain (from config)
+        # initial_digital_bits=10: 항상 10비트 사용
+        # enable_gain_feedback=True: AGC 활성화 (gain 자동 조절)
+        super().__init__(initial_digital_bits=10, use_correlation_detection=False, enable_gain_feedback=True)
+        self.mode_name = "High-Performance Fixed AGC (10-bit)"
+        self.current_digital_bits = 10  # 고정 10-bit
 
     def process_packet(self, packet_info: Dict, channel_snr_db: float = 15.0) -> Dict:
-        """패킷 처리 - 항상 고성능 모드 유지"""
-        # 매번 고성능 상태로 강제 설정 (config에서 40dB)
-        self.fsm.current_state = AgcState.HIGH_GAIN
-        self.fsm.current_gain_index = 3
-        self.current_gain_linear = 10**(40/20)  # 40 dB (from config)
+        """패킷 처리 - 디지털 비트만 고정 (10비트), gain은 AGC로 자동 조절"""
+        # 디지털 비트만 고정 (gain은 자동 조절됨)
+        self.current_digital_bits = 10
 
-        # ADC 해상도 고정 (10-bit) - 모든 트래픽에 대해
-        self.current_adc_resolution = 10
-
-        # FSM의 process_indication을 오버라이드하여 상태 변경 막기
-        original_process = self.fsm.process_indication
-        self.fsm.process_indication = lambda *args, **kwargs: False
-
-        # ADC 해상도 변경 막기
+        # 디지털 비트 변경 막기 (항상 10비트 유지)
         original_update_adc = self.update_adc_resolution_for_traffic
         self.update_adc_resolution_for_traffic = lambda traffic_type: None
 
         try:
-            # 부모 클래스의 처리 메서드 호출
+            # 부모 클래스의 처리 메서드 호출 (AGC 피드백 활성화됨)
             result = super().process_packet(packet_info, channel_snr_db)
         finally:
             # 원래 메서드 복구
-            self.fsm.process_indication = original_process
             self.update_adc_resolution_for_traffic = original_update_adc
 
-            # 상태가 변경되었을 수 있으므로 다시 강제 설정
-            self.fsm.current_state = AgcState.HIGH_GAIN
-            self.fsm.current_gain_index = 3
-            self.current_adc_resolution = 10
+            # 디지털 비트 고정 유지
+            self.current_digital_bits = 10
 
         return result
 
@@ -217,10 +204,17 @@ class AdaptiveAGC(AgcSystem):
         return super().process_packet(packet_info, channel_snr_db)
 
 
-def run_comparison_simulation(num_packets: int = 20, snr_values: List[float] = [5, 10, 15, 20], num_iterations: int = 10) -> Dict:
+def run_comparison_simulation(num_packets: int = 20, snr_values: List[float] = None, num_iterations: int = 10) -> Dict:
     """
     세 가지 AGC 방식 비교 시뮬레이션 실행
+
+    Args:
+        num_packets: 각 (traffic, SNR) 시나리오당 패킷 수
+        snr_values: (Deprecated) 트래픽별 SNR은 config.TRAFFIC_SNR_RANGE에서 자동 설정
+        num_iterations: 반복 횟수
     """
+    from config import TRAFFIC_SNR_RANGE
+
     print("=" * 80)
     print(f"AGC Comparison Simulation ({num_iterations} iterations)")
     print("=" * 80)
@@ -229,6 +223,16 @@ def run_comparison_simulation(num_packets: int = 20, snr_values: List[float] = [
     accumulated_results = {'low_power': [], 'high_perf': [], 'adaptive': []}
 
     print(f"\nRunning {num_iterations} iterations...")
+
+    # 트래픽 타입 (3가지만)
+    traffic_types = ['lowpowersignal', 'highperformancesignal']
+
+    # 트래픽별 SNR 범위 출력
+    print("\nTraffic-specific SNR ranges:")
+    for traffic in traffic_types:
+        snr_range = TRAFFIC_SNR_RANGE.get(traffic, [10])
+        print(f"  {traffic}: {snr_range} dB")
+    print("=" * 80)
 
     # 반복 시뮬레이션
     for iteration in range(num_iterations):
@@ -257,87 +261,89 @@ def run_comparison_simulation(num_packets: int = 20, snr_values: List[float] = [
             'packet_count': 0
         } for name in agc_systems.keys()}
 
-        traffic_types = ['wake_up', 'sensor', 'voice', 'video']
+        # 트래픽별로 순회 (각 traffic은 고유한 SNR 범위 사용)
+        for traffic_type in traffic_types:
+            # 트래픽별 SNR 범위 가져오기
+            snr_range = TRAFFIC_SNR_RANGE.get(traffic_type, [10])
 
-        # 각 SNR 값에 대해 시뮬레이션
-        for snr in snr_values:
-            for traffic_idx, traffic_type in enumerate(traffic_types * (num_packets // 4)):
-                # 각 AGC 시스템에 대해 동일한 패킷 처리
-                for name, agc in agc_systems.items():
-                    # 패킷 생성
-                    packet = agc.signal_generator.create_complete_packet(traffic_type)
+            for snr in snr_range:
+                for _ in range(num_packets):
+                    # 각 AGC 시스템에 대해 동일한 패킷 처리
+                    for name, agc in agc_systems.items():
+                        # 패킷 생성
+                        packet = agc.signal_generator.create_complete_packet(traffic_type)
 
-                    # 패킷 처리
-                    result = agc.process_packet(packet, snr)
+                        # 패킷 처리
+                        result = agc.process_packet(packet, snr)
 
-                    # 디버깅 출력 제거 (1000회 반복이므로)
+                        # 결과 수집
+                        ber = result.get('final_ber', {}).get('ber', 0)
 
-                    # 결과 수집
-                    ber = result.get('final_ber', {}).get('ber', 0)
+                        # BER by traffic type
+                        if traffic_type not in iteration_results[name]['ber_by_traffic']:
+                            iteration_results[name]['ber_by_traffic'][traffic_type] = []
+                        iteration_results[name]['ber_by_traffic'][traffic_type].append(ber)
 
-                    # BER by traffic type
-                    if traffic_type not in iteration_results[name]['ber_by_traffic']:
-                        iteration_results[name]['ber_by_traffic'][traffic_type] = []
-                    iteration_results[name]['ber_by_traffic'][traffic_type].append(ber)
+                        # BER by SNR
+                        if snr not in iteration_results[name]['ber_by_snr']:
+                            iteration_results[name]['ber_by_snr'][snr] = []
+                        iteration_results[name]['ber_by_snr'][snr].append(ber)
 
-                    # BER by SNR
-                    if snr not in iteration_results[name]['ber_by_snr']:
-                        iteration_results[name]['ber_by_snr'][snr] = []
-                    iteration_results[name]['ber_by_snr'][snr].append(ber)
+                        # Power measurements (FSM 제거)
+                        analog_power = agc.analog_power.calculate_power(
+                            "RUNNING",  # FSM 제거: 단순 상태
+                            is_low_power_mode=False  # 통일된 아날로그, 항상 high-perf
+                        )
 
-                    # Power measurements
-                    analog_power = agc.analog_power.calculate_power(
-                        agc.fsm.current_state.value,
-                        is_low_power_mode=(agc.fsm.current_state == AgcState.LOW_GAIN_LP)
-                    )
+                        # 디지털 에너지 차분 계산 (이전 값 저장)
+                        if not hasattr(agc, '_prev_digital_energy'):
+                            agc._prev_digital_energy = 0
 
-                    # 디지털 에너지 차분 계산 (이전 값 저장)
-                    if not hasattr(agc, '_prev_digital_energy'):
-                        agc._prev_digital_energy = 0
+                        # 연산량 통계 가져오기
+                        ops_stats = agc.digital_computation.get_operation_stats()
+                        current_digital_energy = ops_stats['total_energy_pj']
+                        digital_energy_consumed = current_digital_energy - agc._prev_digital_energy
+                        agc._prev_digital_energy = current_digital_energy
 
-                    # 연산량 통계 가져오기
-                    ops_stats = agc.digital_computation.get_operation_stats()
-                    current_digital_energy = ops_stats['total_energy_pj']
-                    digital_energy_consumed = current_digital_energy - agc._prev_digital_energy
-                    agc._prev_digital_energy = current_digital_energy
+                        # 제안 기법인 경우 오버헤드 확인 (디버깅용) - 첫 번째 iteration, 첫 번째 SNR만
+                        if name == 'adaptive' and iteration == 0 and snr == snr_range[0]:
+                            if not hasattr(agc, '_debug_printed'):
+                                print(f"\n[Adaptive AGC] Traffic: {traffic_type}")
+                                print(f"  Common ops: {ops_stats.get('common_operations', 0):,}")
+                                print(f"  Proposed ops: {ops_stats.get('proposed_operations', 0):,}")
+                                print(f"  Overhead: {ops_stats.get('proposed_overhead_percent', 0):.1f}%")
+                                agc._debug_printed = True
 
-                    # 제안 기법인 경우 오버헤드 확인 (디버깅용)
-                    if name == 'adaptive' and iteration == 0 and traffic_idx == 0 and snr == snr_values[0]:
-                        print(f"\n[Adaptive AGC] Traffic: {traffic_type}")
-                        print(f"  Common ops: {ops_stats.get('common_operations', 0):,}")
-                        print(f"  Proposed ops: {ops_stats.get('proposed_operations', 0):,}")
-                        print(f"  Overhead: {ops_stats.get('proposed_overhead_percent', 0):.1f}%")
+                        # Power by traffic type
+                        if traffic_type not in iteration_results[name]['power_by_traffic']:
+                            iteration_results[name]['power_by_traffic'][traffic_type] = {
+                                'analog': [],
+                                'digital': []
+                            }
+                        iteration_results[name]['power_by_traffic'][traffic_type]['analog'].append(analog_power)
+                        iteration_results[name]['power_by_traffic'][traffic_type]['digital'].append(digital_energy_consumed)
 
-                    # Power by traffic type
-                    if traffic_type not in iteration_results[name]['power_by_traffic']:
-                        iteration_results[name]['power_by_traffic'][traffic_type] = {
-                            'analog': [],
-                            'digital': []
-                        }
-                    iteration_results[name]['power_by_traffic'][traffic_type]['analog'].append(analog_power)
-                    iteration_results[name]['power_by_traffic'][traffic_type]['digital'].append(digital_energy_consumed)
+                        # Power by gain level (FSM 제거)
+                        state = "RUNNING"  # FSM 제거: 단순 상태
+                        if state not in iteration_results[name]['power_by_state']:
+                            iteration_results[name]['power_by_state'][state] = {
+                                'analog': [],
+                                'digital': [],
+                                'count': 0
+                            }
+                        iteration_results[name]['power_by_state'][state]['analog'].append(analog_power)
+                        iteration_results[name]['power_by_state'][state]['digital'].append(digital_energy_consumed)
+                        iteration_results[name]['power_by_state'][state]['count'] += 1
 
-                    # Power by FSM state
-                    state = agc.fsm.current_state.value
-                    if state not in iteration_results[name]['power_by_state']:
-                        iteration_results[name]['power_by_state'][state] = {
-                            'analog': [],
-                            'digital': [],
-                            'count': 0
-                        }
-                    iteration_results[name]['power_by_state'][state]['analog'].append(analog_power)
-                    iteration_results[name]['power_by_state'][state]['digital'].append(digital_energy_consumed)
-                    iteration_results[name]['power_by_state'][state]['count'] += 1
+                        # Time series
+                        iteration_results[name]['time_series']['ber'].append(ber)
+                        iteration_results[name]['time_series']['analog_power'].append(analog_power)
+                        iteration_results[name]['time_series']['digital_energy'].append(digital_energy_consumed)
 
-                    # Time series
-                    iteration_results[name]['time_series']['ber'].append(ber)
-                    iteration_results[name]['time_series']['analog_power'].append(analog_power)
-                    iteration_results[name]['time_series']['digital_energy'].append(digital_energy_consumed)
-
-                    # Total energy
-                    iteration_results[name]['total_analog_energy'] += analog_power * 10  # 10ms per packet
-                    iteration_results[name]['total_digital_energy'] += digital_energy_consumed
-                    iteration_results[name]['packet_count'] += 1
+                        # Total energy
+                        iteration_results[name]['total_analog_energy'] += analog_power * 10  # 10ms per packet
+                        iteration_results[name]['total_digital_energy'] += digital_energy_consumed
+                        iteration_results[name]['packet_count'] += 1
 
         # 각 반복 결과 저장
         for name in agc_systems.keys():
@@ -347,8 +353,15 @@ def run_comparison_simulation(num_packets: int = 20, snr_values: List[float] = [
     print("Calculating averages...")
     print("=" * 80)
 
+    # 모든 SNR 값 수집
+    all_snr_values = []
+    for traffic in traffic_types:
+        snr_range = TRAFFIC_SNR_RANGE.get(traffic, [10])
+        all_snr_values.extend(snr_range)
+    all_snr_values = sorted(set(all_snr_values))  # 중복 제거 및 정렬
+
     # 평균 결과 계산
-    results = calculate_average_results(accumulated_results, traffic_types, snr_values)
+    results = calculate_average_results(accumulated_results, traffic_types, all_snr_values)
 
     # 마지막 반복의 AGC 시스템 반환 (그래프용)
     return results, agc_systems
@@ -667,9 +680,9 @@ def plot_comparison_results(results: Dict, agc_systems: Dict):
 def main():
     """메인 함수"""
     # 시뮬레이션 실행 (10회 반복)
+    # SNR 값은 config.TRAFFIC_SNR_RANGE에서 자동으로 트래픽별로 설정됨
     results, agc_systems = run_comparison_simulation(
         num_packets=20,
-        snr_values=[5, 10, 15, 20],
         num_iterations=10  # 10회 반복
     )
 
