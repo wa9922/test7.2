@@ -24,6 +24,24 @@ Demonstrate that an adaptive AGC system can achieve a better balance between ene
 4. **FSM 제거**: FSM을 제거하고 순수 피드백 기반 AGC로 변경
 5. **트래픽 타입**: sensor/voice/video → lowpowersignal/highperformancesignal
 
+### Implementation Platforms
+This project includes **two complementary implementations**:
+
+1. **Python Simulation** (root directory): Batch-mode packet processing with comprehensive metrics collection
+   - Complete system simulation with carrier sensing, signal field decoding, and BER calculation
+   - Generates 11 comparison graphs (energy, accuracy, latency, operations, etc.)
+   - Suitable for research, final results, and publication-quality metrics
+   - Files: `main_agc_system.py`, `agc_comparison.py`, and supporting modules
+
+2. **GNURadio GUI** (`gnu/` directory): Real-time stream processing with interactive visualization
+   - Live waveform display and BER comparison
+   - Interactive SNR slider and traffic type controls
+   - Same core algorithms (UnifiedRFPath, ADC, gain feedback)
+   - Suitable for development, debugging, demonstrations, and hardware-in-the-loop testing
+   - Files: `gnu/python/agc_*.py`, `gnu/examples/agc_comparison.grc`
+
+Both implementations share the same theoretical foundation and produce equivalent results for the same inputs.
+
 ---
 
 ## 2. Overall Architecture
@@ -992,6 +1010,8 @@ def calculate_power(self, state_name: str, is_low_power: bool = False):
 
 ## 13. Files Summary
 
+### Core Python Simulation Files
+
 | File | Lines | Purpose |
 |------|-------|---------|
 | main_agc_system.py | ~1000 | Main AGC system + comparison entry point + Fixed models |
@@ -1009,6 +1029,26 @@ def calculate_power(self, state_name: str, is_low_power: bool = False):
 | optimize_gains.py | ~145 | Gain optimization utility |
 | README.md | - | Project overview |
 | CLAUDE.md | - | This documentation file |
+| CLAUDE.ko.md | - | Korean version of documentation |
+| SYSTEM_DIAGRAM.txt | - | System architecture diagram |
+
+### GNURadio GUI Implementation Files (gnu/)
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| gnu/python/__init__.py | ~10 | GNURadio module initialization |
+| gnu/python/agc_packet_source.py | ~160 | Packet source block (generates STF+LTF+SF+Payload with AWGN) |
+| gnu/python/agc_system_block.py | ~280 | AGC system processing block (RF→ADC→Truncation→Feedback) |
+| gnu/python/agc_ber_calc.py | ~100 | BER calculation block (theoretical BPSK + SQNR) |
+| gnu/python/agc_power_meter.py | ~120 | Power/energy measurement block (analog + digital) |
+| gnu/examples/agc_comparison.grc | - | GNURadio Companion flowgraph (GUI configuration) |
+| gnu/README.md | ~377 | GNURadio implementation documentation |
+| gnu/QUICKSTART_KR.md | - | Korean quick start guide |
+
+**Total Lines of Code**:
+- Core Python: ~4711 lines
+- GNURadio Blocks: ~721 lines
+- **Grand Total: ~5432 lines**
 
 **Deleted Files** (after FSM removal):
 - agc_fsm.py (268 lines) - No longer needed
@@ -1078,6 +1118,36 @@ result_hp = high_perf.process_packet(packet, channel_snr_db=10)
 # 차이점: 디지털 비트만 고정, gain은 모두 AGC로 자동 조절
 ```
 
+### GNURadio GUI Usage
+
+```bash
+# Install GNURadio (Ubuntu/Debian)
+sudo apt-get install gnuradio python3-scipy
+
+# Launch GNURadio Companion
+gnuradio-companion gnu/examples/agc_comparison.grc
+
+# In GNURadio Companion:
+# 1. Press F5 (Generate) to create Python code
+# 2. Press F6 (Execute) to run the flowgraph
+# 3. Adjust SNR slider and traffic type to see real-time results
+```
+
+**GNURadio Features**:
+- Real-time visualization of all 3 AGC models (Low-Power, High-Performance, Adaptive)
+- Interactive SNR control (0-30 dB slider)
+- Live BER comparison display
+- Message-based power/energy reporting
+- Same algorithms as Python simulation (UnifiedRFPath, ADC10bit, gain feedback)
+
+**Block Descriptions**:
+1. **AGC Packet Source**: Generates BPSK packets with AWGN noise
+2. **AGC System Block**: Processes signal through RF→ADC→Digital Truncation→Gain Feedback
+3. **BER Calculator**: Computes theoretical BER based on SQNR and channel SNR
+4. **Power Meter**: Measures analog (mJ) and digital (pJ) energy consumption
+
+See `gnu/README.md` for detailed GNURadio documentation.
+
 ---
 
 ## 15. Key Insights for AI Assistants
@@ -1114,9 +1184,272 @@ result_hp = high_perf.process_packet(packet, channel_snr_db=10)
     - RF amplification and ADC quantization separated
     - Gain feedback applied to next block (not current)
 
+11. **Dual Implementation Strategy**:
+    - **Python Simulation**: Research-focused, batch processing, comprehensive metrics, publication-quality plots
+    - **GNURadio GUI**: Development-focused, real-time, interactive controls, visualization
+    - Both use identical core algorithms (UnifiedRFPath, ADC10bit, gain feedback, digital truncation)
+    - Choose Python for final results, GNURadio for debugging/demos
+
 ---
 
-## 16. Extending the System
+## 16. GNURadio GUI Implementation
+
+### Overview
+
+The `gnu/` directory contains a **GNURadio-based GUI implementation** of the AGC system that allows real-time visualization and interaction with the simulation. This implementation provides the same core algorithms as the Python simulation but in a stream-processing framework suitable for hardware-in-the-loop testing.
+
+### Architecture
+
+```
+GNURadio Flowgraph
+├── AGC Packet Source (3 instances)
+│   ├── Generates BPSK packets (STF+LTF+SF+Payload)
+│   ├── Adds AWGN noise at specified SNR
+│   └── Outputs complex stream + packet metadata
+│
+├── AGC System Block (3 instances: LP, HP, Adaptive)
+│   ├── Receives complex signal stream
+│   ├── Applies UnifiedRFPath (LNA 20dB + VGA variable)
+│   ├── ADC 10-bit quantization
+│   ├── Digital truncation (5-bit or 10-bit)
+│   ├── Peak-based gain feedback (10-50 dB)
+│   └── Outputs processed signal + AGC statistics
+│
+├── BER Calculator (3 instances)
+│   ├── Computes theoretical BER from SQNR + channel SNR
+│   ├── SQNR_dB = 6.02 × bits + 1.76
+│   ├── Effective SNR = 1/(1/SNR_ch + 1/SQNR)
+│   └── BER = 0.5 × erfc(sqrt(SNR_eff))
+│
+├── Power Meter (3 instances)
+│   ├── Analog energy: 392 mW (MAX2829, always same)
+│   ├── Digital energy: K_ADD × samples × bits + K_MUL × samples × bits²
+│   └── Outputs power/energy statistics
+│
+└── GUI Elements
+    ├── Time Sink: Signal waveform display
+    ├── Number Sinks: BER values for 3 models
+    ├── Message Debug: Console output for stats
+    └── Variable Controls: SNR slider, traffic type selector
+```
+
+### Key GNURadio Blocks
+
+#### 1. **agc_packet_source.py** (~160 lines)
+
+**Class**: `agc_packet_source(gr.sync_block)`
+
+**Purpose**: Generate PHY-layer packets with BPSK modulation and AWGN noise
+
+**Key Methods**:
+- `__init__()`: Initialize packet generator with traffic type, SNR, burst parameters
+- `work()`: Stream processing function (called continuously by GNURadio scheduler)
+  - Generates complete packets (STF + LTF + Signal Field + Payload)
+  - Applies BPSK modulation (20 samples per symbol)
+  - Adds AWGN noise at specified SNR
+  - Publishes packet metadata via message port
+- `generate_packet()`: Create BPSK-modulated packet with preamble
+- `add_awgn()`: Add white Gaussian noise at target SNR
+
+**Message Ports**:
+- Output: `packet_info` (PMT dict with packet structure metadata)
+
+**Parameters**:
+- `traffic_type`: 'lowpowersignal' or 'highperformancesignal'
+- `snr_db`: Channel SNR in dB (0-30)
+- `packets_per_burst`: Number of packets per transmission burst
+- `repeat`: Boolean, whether to continuously generate packets
+
+#### 2. **agc_system_block.py** (~280 lines)
+
+**Class**: `agc_system_block(gr.sync_block)`
+
+**Purpose**: Main AGC processing (RF path → ADC → Digital truncation → Gain feedback)
+
+**Key Methods**:
+- `__init__()`: Initialize AGC mode, RF path, ADC, gain feedback
+- `work()`: Stream processing
+  - Apply RF amplification (UnifiedRFPath: LNA 20dB + VGA variable)
+  - ADC 10-bit quantization
+  - Digital truncation (5-bit or 10-bit based on mode)
+  - **Gain feedback loop**:
+    - Measure peak: `max(|signal|)`
+    - If peak > 0.9: decrease gain by 1 dB (prevent saturation)
+    - If peak < 0.25: increase gain by 1 dB (improve SNR)
+    - Clip gain to range [10, 50] dB
+  - Publish AGC statistics via message port
+- `handle_traffic_info()`: Receive traffic type and update digital bits (Adaptive mode only)
+- `apply_rf_path()`: LNA → Mixer → VGA → LPF
+- `apply_adc()`: 10-bit quantization + digital truncation
+
+**Message Ports**:
+- Input: `traffic_info` (traffic type from packet source)
+- Output: `agc_stats` (gain, digital bits, peak level)
+
+**AGC Modes**:
+- `'low_power'`: 5-bit digital (fixed), gain AGC (variable)
+- `'high_performance'`: 10-bit digital (fixed), gain AGC (variable)
+- `'adaptive'`: 5/10-bit digital (traffic-based), gain AGC (variable)
+
+**Important**: All modes use gain feedback. "Fixed" means fixed digital bits, not fixed gain.
+
+#### 3. **agc_ber_calc.py** (~100 lines)
+
+**Class**: `agc_ber_calc(gr.sync_block)`
+
+**Purpose**: Calculate theoretical BER based on quantization noise and channel SNR
+
+**Key Methods**:
+- `__init__()`: Initialize BER calculator with ADC bits
+- `work()`: Compute BER
+  - Calculate SQNR: `SQNR_dB = 6.02 × adc_bits + 1.76`
+  - Compute effective SNR: `SNR_eff = 1 / (1/SNR_channel + 1/SQNR)`
+  - Calculate BPSK BER: `BER = 0.5 × erfc(sqrt(SNR_eff))`
+  - Publish BER statistics
+- `handle_snr_message()`: Update channel SNR from upstream
+- `handle_bits_message()`: Update ADC bits (for Adaptive mode)
+
+**Message Ports**:
+- Input: `snr_in` (channel SNR), `bits_in` (digital bits)
+- Output: `ber_out` (BER statistics)
+
+**Example Output**:
+- 5-bit, SNR=10dB → BER ≈ 8.43 × 10⁻⁸
+- 10-bit, SNR=10dB → BER ≈ 2.54 × 10⁻¹⁰ (332× better)
+
+#### 4. **agc_power_meter.py** (~120 lines)
+
+**Class**: `agc_power_meter(gr.sync_block)`
+
+**Purpose**: Measure analog and digital energy consumption
+
+**Key Methods**:
+- `__init__()`: Initialize power models (MAX2829 analog, bit-dependent digital)
+- `work()`: Calculate power/energy
+  - **Analog energy**: `P_analog × time = 392 mW × (samples / sampling_rate)`
+  - **Digital energy**:
+    - Additions: `K_ADD × samples × bits`
+    - Multiplications: `K_MUL × samples × bits²`
+    - Area scaling: `area_ratio = bits² / 64` (normalized to 8-bit)
+    - Energy (pJ): `(adds × 0.1 + mults × 2.5) × area_ratio`
+  - Total energy: analog (mJ) + digital (mJ)
+  - Publish power statistics
+- `handle_bits_message()`: Update digital bits for power calculation
+
+**Message Ports**:
+- Input: `bits_in` (digital bits)
+- Output: `power_out` (power/energy statistics)
+
+**Energy Scaling** (10000 samples @ 20 MHz):
+- Low-Power (5-bit): 0.196 mJ analog + 0.019 mJ digital = 0.215 mJ
+- High-Performance (10-bit): 0.196 mJ analog + 0.263 mJ digital = 0.459 mJ
+- Adaptive: Switches based on traffic type
+
+### GNURadio Companion Flowgraph
+
+**File**: `gnu/examples/agc_comparison.grc`
+
+**Structure**:
+```
+Variables (User Controls)
+├── snr_slider: 0-30 dB (adjustable in real-time)
+└── traffic_type: 'lowpowersignal' or 'highperformancesignal'
+
+Signal Generation (3 parallel paths)
+├── agc_packet_source (LP) → agc_system_block (low_power) → Time Sink (LP)
+├── agc_packet_source (HP) → agc_system_block (high_performance) → Time Sink (HP)
+└── agc_packet_source (Adaptive) → agc_system_block (adaptive) → Time Sink (Adaptive)
+
+BER Calculation (3 parallel paths)
+├── agc_ber_calc (5-bit) → Number Sink (LP BER)
+├── agc_ber_calc (10-bit) → Number Sink (HP BER)
+└── agc_ber_calc (dynamic) → Number Sink (Adaptive BER)
+
+Power Measurement (3 parallel paths)
+├── agc_power_meter (5-bit) → Message Debug (LP Power)
+├── agc_power_meter (10-bit) → Message Debug (HP Power)
+└── agc_power_meter (dynamic) → Message Debug (Adaptive Power)
+```
+
+### Running the GNURadio GUI
+
+```bash
+# 1. Install GNURadio 3.8+
+sudo apt-get install gnuradio python3-scipy
+
+# 2. Navigate to repository
+cd /home/user/test7.2
+
+# 3. Launch GNURadio Companion
+gnuradio-companion gnu/examples/agc_comparison.grc
+
+# 4. In GNURadio Companion GUI:
+#    - Press F5 (Generate) to compile Python code
+#    - Press F6 (Execute) to run simulation
+#    - Adjust SNR slider (0-30 dB)
+#    - Change traffic type selector
+#    - Observe real-time BER, waveforms, power in GUI
+```
+
+### Differences from Python Simulation
+
+| Aspect | Python Simulation | GNURadio GUI |
+|--------|------------------|--------------|
+| Processing Model | Packet-based (batch) | Stream-based (continuous) |
+| Execution | Offline, batch processing | Real-time, interactive |
+| Carrier Sensing | 3 methods (saturation, energy, correlation) | Simplified (omitted in GUI) |
+| Signal Field Decoding | Demodulates signal field bits | Message passing (metadata) |
+| BER Calculation | Hard-decision on received STF | Theoretical (SQNR + channel SNR) |
+| Visualization | Static PNG plots (11 graphs) | Real-time waveforms and numbers |
+| User Interaction | Edit code → run → view results | Sliders and controls (live) |
+| Use Case | Research, final results | Development, debugging, demos |
+
+**Core Algorithms**: Both implementations use identical RF path, ADC, truncation, and gain feedback logic.
+
+### Debugging and Troubleshooting
+
+**Module Import Errors**:
+```python
+# Add to GRC "Options" block → "Generate Options" → "_source_code":
+import sys
+sys.path.insert(0, '/home/user/test7.2')
+sys.path.insert(0, '/home/user/test7.2/gnu/python')
+```
+
+**scipy Not Found**:
+```bash
+pip install scipy
+# or
+conda install scipy
+```
+
+**GNURadio Version Check**:
+```bash
+gnuradio-companion --version  # Should be 3.8+
+python3 --version              # Should be 3.6+
+```
+
+### Expected GUI Output
+
+**SNR = 10 dB, Low Power Signal**:
+- Low-Power BER: ~8.43 × 10⁻⁸ (5-bit quantization)
+- High-Performance BER: ~2.54 × 10⁻¹⁰ (10-bit quantization)
+- Adaptive BER: ~8.43 × 10⁻⁸ (selects 5-bit for low power signal)
+
+**SNR = 10 dB, High Performance Signal**:
+- Low-Power BER: ~8.43 × 10⁻⁸ (5-bit quantization)
+- High-Performance BER: ~2.54 × 10⁻¹⁰ (10-bit quantization)
+- Adaptive BER: ~2.54 × 10⁻¹⁰ (selects 10-bit for high performance signal)
+
+**Adaptive AGC Advantage**:
+- Automatically adjusts digital bits based on traffic type
+- Achieves optimal power-performance trade-off
+- Low-power signal: Uses 5-bit (saves energy, adequate accuracy)
+- High-performance signal: Uses 10-bit (higher accuracy when needed)
+
+---
+
+## 17. Extending the System
 
 ### Potential Enhancements
 
@@ -1132,8 +1465,103 @@ result_hp = high_perf.process_packet(packet, channel_snr_db=10)
 
 ---
 
+## 18. Development Workflow for AI Assistants
+
+### Code Modification Guidelines
+
+When modifying this codebase, AI assistants should:
+
+1. **Understand the Dual Implementation**: Changes to core algorithms should be reflected in BOTH Python simulation and GNURadio blocks
+   - If modifying RF path logic, update both `rf_paths.py` AND `gnu/python/agc_system_block.py`
+   - If changing power models, update both `power_measurement.py` AND `gnu/python/agc_power_meter.py`
+   - Keep algorithms synchronized to ensure consistency
+
+2. **Respect System Requirements**:
+   - ✅ Keep analog path unified (UnifiedRFPath, always same power)
+   - ✅ ADC is always 10-bit, digital truncation only
+   - ✅ No FSM, use pure feedback-based gain control
+   - ✅ Traffic types: wake_up, lowpowersignal, highperformancesignal (3 types only)
+
+3. **Testing After Changes**:
+   ```bash
+   # Test Python simulation
+   python main_agc_system.py  # Should generate 11 PNG plots
+
+   # Test GNURadio blocks
+   gnuradio-companion gnu/examples/agc_comparison.grc  # Should run without errors
+   ```
+
+4. **Documentation Updates**:
+   - Update CLAUDE.md when adding/removing files or changing architecture
+   - Update gnu/README.md when modifying GNURadio blocks
+   - Keep line counts in Section 13 (Files Summary) approximately accurate
+
+5. **Common Modifications**:
+   - **Adding new traffic type**: Update config.py (TRAFFIC_INDICATION_MAPPING, DIGITAL_TRUNCATION_BITS)
+   - **Changing gain range**: Update main_agc_system.py (gain feedback logic, clipping range)
+   - **Modifying power model**: Update analog_power_base.py (add new IC model)
+   - **Adding carrier sensing method**: Update carrier_sensing.py (add detector class, update CarrierSensingTop)
+
+### Git Workflow
+
+```bash
+# All development should be on the designated branch
+git checkout claude/claude-md-mieq9cfdt5dkiu24-012xJ52TbreGLP7ACwf3Un5Y
+
+# After making changes
+git add .
+git commit -m "Brief description of changes"
+git push -u origin claude/claude-md-mieq9cfdt5dkiu24-012xJ52TbreGLP7ACwf3Un5Y
+```
+
+### File Organization
+
+```
+test7.2/
+├── Core Python Simulation (13 files, ~4711 lines)
+│   ├── main_agc_system.py          # Entry point, main AGC system
+│   ├── agc_comparison.py           # 3-model comparison, graph generation
+│   ├── carrier_sensing.py          # Packet detection (saturation, energy, correlation)
+│   ├── signal_generator.py         # BPSK packet generation
+│   ├── ber_calculator.py           # BER measurement
+│   ├── rf_paths.py                 # RF frontend (UnifiedRFPath)
+│   ├── adc.py                      # ADC quantization + digital truncation
+│   ├── power_measurement.py        # Power/energy aggregation
+│   ├── analog_power_base.py        # IC power models (MAX2829)
+│   ├── digital.py                  # Digital circuit area models
+│   ├── config.py                   # Configuration parameters
+│   ├── simulation_utils.py         # Utilities (plotting, data collection)
+│   └── optimize_gains.py           # Gain optimization utility
+│
+├── GNURadio GUI Implementation (gnu/, ~721 lines)
+│   ├── python/
+│   │   ├── __init__.py             # Module initialization
+│   │   ├── agc_packet_source.py    # Packet source block
+│   │   ├── agc_system_block.py     # AGC processing block
+│   │   ├── agc_ber_calc.py         # BER calculation block
+│   │   └── agc_power_meter.py      # Power measurement block
+│   ├── examples/
+│   │   └── agc_comparison.grc      # GNURadio Companion flowgraph
+│   ├── README.md                   # GNURadio documentation
+│   └── QUICKSTART_KR.md            # Korean quick start
+│
+├── Documentation
+│   ├── CLAUDE.md                   # This file (comprehensive documentation)
+│   ├── CLAUDE.ko.md                # Korean version
+│   ├── SYSTEM_DIAGRAM.txt          # System architecture diagram
+│   └── README.md                   # Project overview
+│
+└── Generated Outputs
+    ├── metrics_*.png               # 11 comparison graphs from Python simulation
+    └── gnuradio_screenshot.jpeg    # GNURadio GUI screenshot
+```
+
+---
+
 ## Contact/Authorship
 
 This is an academic/research project focusing on AGC design tradeoffs in multi-traffic wireless receivers. All components are self-contained Python implementations suitable for simulation and education purposes.
 
-** 완전 반영 완료** (System Fully Implemented)
+**Last Updated**: 2025-11-25
+**Documentation Version**: 2.0 (Added GNURadio GUI implementation documentation)
+**Status**: ✅ 완전 반영 완료 (System Fully Implemented with dual Python/GNURadio platforms)
