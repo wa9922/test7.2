@@ -27,12 +27,12 @@
         ║                   ▼                                         ║
         ║  ┌───────────────────────────────────────────────────┐     ║
         ║  │ 2. RF Path (UnifiedRFPath) - Multi-Stage AGC     │     ║
-        ║  │    - LNA: [0, 15, 30] dB (3단계, discrete)       │     ║
+        ║  │    - LNA: [0, 15, 30] dB (독립 제어, discrete)  │     ║
         ║  │    - Mixer                                        │     ║
-        ║  │    - VGA: 0~40 dB (연속, continuous)             │◄────╫─┐
+        ║  │    - VGA: 0~40 dB (독립 제어, continuous)        │◄────╫─┐
         ║  │    - LPF (Low-Pass Filter)                        │     ║ │
-        ║  │    Total Gain = LNA + VGA (자동 분배)            │     ║ │
-        ║  │    예: 30dB → LNA 15dB + VGA 15dB                │     ║ │
+        ║  │    Total Gain = LNA + VGA                         │     ║ │
+        ║  │    제어기가 각각 계산: 30dB → LNA 15 + VGA 15    │     ║ │
         ║  └────────────────┬──────────────────────────────────┘     ║ │
         ║                   │ Amplified STF                          ║ │
         ║                   ▼                                         ║ │
@@ -115,28 +115,60 @@
 
 ### 2.1 Multi-Stage Hierarchical Gain Control
 
-**UnifiedRFPath는 계층적 2단계 AGC를 구현**:
+**실제 RF 수신기와 동일한 계층적 AGC 구현**:
 
-1. **LNA (Low Noise Amplifier)**:
+#### 하드웨어 구조 (독립 제어):
+```
+┌──────────────────────────────────────┐
+│  AGC Controller (Digital Logic)      │
+│  - 전력 측정                         │
+│  - Gain 계산                         │
+└────┬──────────────────┬──────────────┘
+     │                  │
+  LNA_CTRL          VGA_CTRL
+  (레지스터)        (제어 전압/코드)
+     │                  │
+     ▼                  ▼
+┌─────────┐        ┌─────────┐
+│   LNA   │   →    │   VGA   │
+│ [0,15,30]│        │  0~40   │
+│    dB    │        │   dB    │
+└─────────┘        └─────────┘
+```
+
+1. **LNA (Low Noise Amplifier)** - 독립 제어:
    - Discrete 3단계: [0, 15, 30] dB
+   - 제어: 레지스터 또는 디지털 코드
    - Coarse adjustment (큰 단위 조절)
    - 느린 응답 (회로 특성상)
 
-2. **VGA (Variable Gain Amplifier)**:
+2. **VGA (Variable Gain Amplifier)** - 독립 제어:
    - Continuous: 0~40 dB
+   - 제어: 아날로그 전압 또는 fine-step 디지털
    - Fine adjustment (정밀 조절)
    - 빠른 응답
 
-**Gain 분배 알고리즘** (`set_total_gain`):
+**제어 로직 알고리즘** (`set_total_gain`):
 ```python
+# AGC Controller가 수행
 target = 30 dB 요청 시:
-1. VGA 우선 사용 (0~40 dB 범위)
-2. 최적 LNA 레벨 선택:
-   - LNA 0dB + VGA 30dB ✓ (가능)
-   - LNA 15dB + VGA 15dB ✓ (선택, VGA 중간값 유지)
-   - LNA 30dB + VGA 0dB ✓ (가능하지만 비선호)
-3. 결과: LNA 15dB + VGA 15dB
+
+1. 모든 LNA 레벨에 대해 검토:
+   - LNA 0dB  → VGA 30dB 필요 ✓ (VGA 범위 내)
+   - LNA 15dB → VGA 15dB 필요 ✓ (VGA 중간값, 선택!)
+   - LNA 30dB → VGA 0dB  필요 ✓ (VGA 최소값)
+
+2. 최적 조합 선택 (VGA 중간값 선호):
+   - LNA 레지스터 = 15 dB 설정
+   - VGA 제어 = 15 dB 설정
+
+3. 결과: Total Gain = 15 + 15 = 30 dB
 ```
+
+**실제 하드웨어와의 대응**:
+- `current_lna_index` → LNA 제어 레지스터 값
+- `vga_gain_db` → VGA 제어 전압/코드
+- 두 개를 **독립적으로** 설정하여 원하는 총 gain 달성
 
 ### 2.2 피드백 루프 동작 시점
 
@@ -175,17 +207,19 @@ else:
 # 4단계: Gain 범위 제한
 new_gain_db = clip(new_gain_db, 10.0, 50.0)  # dB
 
-# 5단계: RF Path에 새 gain 적용 (LNA+VGA 자동 분배)
+# 5단계: RF Path에 새 gain 적용 (제어 로직이 LNA와 VGA 각각 계산)
 rf_path.set_total_gain(new_gain_db)
-# 내부적으로:
-#   - 가능한 한 VGA로 조절 (fine tuning)
-#   - 필요 시 LNA 레벨 변경 (coarse tuning)
-#   예: 30dB → LNA 15dB + VGA 15dB
+# 내부 동작 (실제 AGC 제어기와 동일):
+#   1. 목표 total gain에 대해 최적 LNA 레벨 선택
+#   2. 나머지를 VGA로 충당
+#   3. LNA 레지스터 설정 (discrete)
+#   4. VGA 제어 값 설정 (continuous)
+#   예: 30dB 요청 → LNA_reg=15dB, VGA_ctrl=15dB
 
 current_gain_db = new_gain_db
 ```
 
-**LNA+VGA 분배 예시**:
+**LNA와 VGA 제어 값 계산 예시**:
 ```
 Total Gain 요청 → LNA + VGA 분배
 ─────────────────────────────────
