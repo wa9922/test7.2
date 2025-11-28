@@ -26,12 +26,13 @@
         ║                   │                                         ║
         ║                   ▼                                         ║
         ║  ┌───────────────────────────────────────────────────┐     ║
-        ║  │ 2. RF Path (UnifiedRFPath)                        │     ║
-        ║  │    - LNA: 20 dB (고정)                            │     ║
+        ║  │ 2. RF Path (UnifiedRFPath) - Multi-Stage AGC     │     ║
+        ║  │    - LNA: [0, 15, 30] dB (3단계, discrete)       │     ║
         ║  │    - Mixer                                        │     ║
-        ║  │    - VGA: 0~30 dB (가변)                         │◄────╫─┐
+        ║  │    - VGA: 0~40 dB (연속, continuous)             │◄────╫─┐
         ║  │    - LPF (Low-Pass Filter)                        │     ║ │
-        ║  │    Total Gain = current_gain_db (10~50 dB)       │     ║ │
+        ║  │    Total Gain = LNA + VGA (자동 분배)            │     ║ │
+        ║  │    예: 30dB → LNA 15dB + VGA 15dB                │     ║ │
         ║  └────────────────┬──────────────────────────────────┘     ║ │
         ║                   │ Amplified STF                          ║ │
         ║                   ▼                                         ║ │
@@ -112,7 +113,32 @@
 
 ## 2. AGC 피드백 루프 상세 동작 원리
 
-### 2.1 피드백 루프 동작 시점
+### 2.1 Multi-Stage Hierarchical Gain Control
+
+**UnifiedRFPath는 계층적 2단계 AGC를 구현**:
+
+1. **LNA (Low Noise Amplifier)**:
+   - Discrete 3단계: [0, 15, 30] dB
+   - Coarse adjustment (큰 단위 조절)
+   - 느린 응답 (회로 특성상)
+
+2. **VGA (Variable Gain Amplifier)**:
+   - Continuous: 0~40 dB
+   - Fine adjustment (정밀 조절)
+   - 빠른 응답
+
+**Gain 분배 알고리즘** (`set_total_gain`):
+```python
+target = 30 dB 요청 시:
+1. VGA 우선 사용 (0~40 dB 범위)
+2. 최적 LNA 레벨 선택:
+   - LNA 0dB + VGA 30dB ✓ (가능)
+   - LNA 15dB + VGA 15dB ✓ (선택, VGA 중간값 유지)
+   - LNA 30dB + VGA 0dB ✓ (가능하지만 비선호)
+3. 결과: LNA 15dB + VGA 15dB
+```
+
+### 2.2 피드백 루프 동작 시점
 
 **중요**: AGC 피드백은 **STF (Short Training Field) 구간에서만** 동작합니다.
 
@@ -120,12 +146,12 @@
 - **LTF**: Gain 조정 없음 (채널 추정 용도로만 사용)
 - **Signal Field + Payload**: 확정된 gain으로 처리
 
-### 2.2 피드백 메커니즘
+### 2.3 피드백 메커니즘 (LNA+VGA 자동 분배)
 
 ```python
 # 1단계: STF 전력 측정
 stf_signal = noisy_signal[0:2560]  # STF 추출
-stf_amplified = rf_path.process(stf_signal, current_gain_db)  # 현재 gain으로 증폭
+stf_amplified = rf_path.process(stf_signal)  # 현재 LNA+VGA로 증폭
 P_measured = 10 * log10(mean(|stf_amplified|²))  # dBFS 단위
 
 # 2단계: 목표 전력과 비교
@@ -149,9 +175,26 @@ else:
 # 4단계: Gain 범위 제한
 new_gain_db = clip(new_gain_db, 10.0, 50.0)  # dB
 
-# 5단계: RF Path에 새 gain 적용
+# 5단계: RF Path에 새 gain 적용 (LNA+VGA 자동 분배)
 rf_path.set_total_gain(new_gain_db)
+# 내부적으로:
+#   - 가능한 한 VGA로 조절 (fine tuning)
+#   - 필요 시 LNA 레벨 변경 (coarse tuning)
+#   예: 30dB → LNA 15dB + VGA 15dB
+
 current_gain_db = new_gain_db
+```
+
+**LNA+VGA 분배 예시**:
+```
+Total Gain 요청 → LNA + VGA 분배
+─────────────────────────────────
+10 dB  → 0dB  + 10dB
+20 dB  → 15dB + 5dB
+30 dB  → 15dB + 15dB (균형)
+40 dB  → 15dB + 25dB
+50 dB  → 30dB + 20dB
+60 dB  → 30dB + 30dB
 ```
 
 ---
